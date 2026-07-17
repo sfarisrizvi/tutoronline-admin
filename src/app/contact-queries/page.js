@@ -3,27 +3,30 @@ import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '../../utils/supabase/client';
 import { AdminNav } from '../../components/AdminNav';
-import { Mail, MessageCircle, CheckCircle, RefreshCw, Clock } from 'lucide-react';
+import { Mail, MessageCircle, CheckCircle, RefreshCw, Clock, AlertCircle } from 'lucide-react';
 
 export default function ContactQueries() {
   const router = useRouter();
   const [queries, setQueries] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [submittingAction, setSubmittingAction] = useState(false);
 
   const fetchQueries = async () => {
     setLoading(true);
+    setError(null);
     const supabase = createClient();
     try {
-      const { data, error } = await supabase
+      const { data, error: fetchErr } = await supabase
         .from('contact_queries')
         .select('*')
         .order('created_at', { ascending: false });
 
-      if (error) throw error;
+      if (fetchErr) throw fetchErr;
       setQueries(data || []);
     } catch (err) {
       console.error(err);
+      setError(err.message || 'An error occurred while fetching contact queries.');
     } finally {
       setLoading(false);
     }
@@ -92,6 +95,12 @@ export default function ContactQueries() {
         <div className="admin-table-container">
           {loading ? (
             <p style={{ textAlign: 'center', padding: '40px' }}>Loading queries...</p>
+          ) : error ? (
+            <div style={{ textAlign: 'center', padding: '40px', color: 'var(--accent-pink)' }}>
+              <AlertCircle size={24} style={{ display: 'block', margin: '0 auto 8px auto' }} />
+              <strong>Error Loading Queries:</strong>
+              <p style={{ fontSize: '13px', margin: '4px 0 0 0', opacity: 0.8 }}>{error}</p>
+            </div>
           ) : queries.length === 0 ? (
             <p style={{ textAlign: 'center', padding: '40px' }}>No queries submitted yet.</p>
           ) : (
