@@ -112,8 +112,8 @@ export default function ContactQueries() {
                   <th>Role</th>
                   <th style={{ width: '350px' }}>Message Details</th>
                   <th>Date</th>
-                  <th>Status</th>
-                  <th style={{ width: '280px' }}>Quick Actions</th>
+                  <th style={{ width: '160px' }}>Status</th>
+                  <th style={{ width: '240px' }}>Respond</th>
                 </tr>
               </thead>
               <tbody>
@@ -150,48 +150,93 @@ export default function ContactQueries() {
                         </div>
                       </td>
                       <td>
-                        <span className={`admin-badge ${getStatusBadge(q.status)}`} style={{ textTransform: 'capitalize' }}>
-                          {q.status}
-                        </span>
+                        <select 
+                          className={`admin-badge ${getStatusBadge(q.status)}`}
+                          style={{ 
+                            height: '28px',
+                            cursor: 'pointer',
+                            outline: 'none',
+                            textTransform: 'capitalize',
+                            fontFamily: 'inherit',
+                            textAlign: 'center',
+                            textAlignLast: 'center',
+                            width: '120px',
+                            padding: '4px 10px',
+                            paddingRight: '24px',
+                            borderRadius: 'var(--rounded-full)',
+                            fontSize: '11px',
+                            fontWeight: '600',
+                            appearance: 'none',
+                            backgroundImage: `url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%23${
+                              q.status === 'resolved' ? '00FF87' : q.status === 'replied' ? '40C4FF' : 'FFB300'
+                            }' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E")`,
+                            backgroundPosition: 'right 8px center',
+                            backgroundRepeat: 'no-repeat',
+                            backgroundSize: '16px'
+                          }}
+                          value={q.status}
+                          onChange={(e) => handleUpdateStatus(q.id, e.target.value)}
+                          disabled={submittingAction}
+                        >
+                          <option value="pending" style={{ backgroundColor: '#2F1B10', color: '#FFB300' }}>Pending</option>
+                          <option value="replied" style={{ backgroundColor: '#0C1E2F', color: '#40C4FF' }}>Replied</option>
+                          <option value="resolved" style={{ backgroundColor: '#14352D', color: '#00FF87' }}>Resolved</option>
+                        </select>
                       </td>
                       <td>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                          {/* Response Link buttons */}
-                          <div style={{ display: 'flex', gap: '6px' }}>
+                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                          <a 
+                            href={`mailto:${q.email}?subject=Tutor%20Online%20Support%20Query`}
+                            className="admin-btn" 
+                            style={{ 
+                              padding: '6px 12px', 
+                              fontSize: '12px', 
+                              backgroundColor: 'rgba(0, 114, 198, 0.15)', 
+                              color: '#38bdf8', 
+                              border: '1px solid rgba(0, 114, 198, 0.4)',
+                              borderRadius: 'var(--rounded-full)',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              textDecoration: 'none'
+                            }}
+                            onMouseOver={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(0, 114, 198, 0.3)';
+                            }}
+                            onMouseOut={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(0, 114, 198, 0.15)';
+                            }}
+                          >
+                            <Mail size={13} /> Email
+                          </a>
+                          {q.phone && (
                             <a 
-                              href={`mailto:${q.email}?subject=Tutor%20Online%20Support%20Query`}
-                              className="admin-btn admin-btn-secondary" 
-                              style={{ padding: '6px 10px', fontSize: '11px', flex: 1 }}
+                              href={waUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="admin-btn" 
+                              style={{ 
+                                padding: '6px 12px', 
+                                fontSize: '12px', 
+                                backgroundColor: 'rgba(37, 211, 102, 0.15)', 
+                                color: '#4ade80', 
+                                border: '1px solid rgba(37, 211, 102, 0.4)',
+                                borderRadius: 'var(--rounded-full)',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                textDecoration: 'none'
+                              }}
+                              onMouseOver={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'rgba(37, 211, 102, 0.3)';
+                              }}
+                              onMouseOut={(e) => {
+                                  e.currentTarget.style.backgroundColor = 'rgba(37, 211, 102, 0.15)';
+                              }}
                             >
-                              <Mail size={12} /> Email
+                              <MessageCircle size={13} /> WhatsApp
                             </a>
-                            {q.phone && (
-                              <a 
-                                href={waUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="admin-btn admin-btn-secondary" 
-                                style={{ padding: '6px 10px', fontSize: '11px', flex: 1, borderColor: '#00E676', color: '#00FF87' }}
-                              >
-                                <MessageCircle size={12} /> WhatsApp
-                              </a>
-                            )}
-                          </div>
-
-                          {/* Status Select action buttons */}
-                          <div style={{ display: 'flex', gap: '4px' }}>
-                            <select 
-                              className="admin-input" 
-                              style={{ height: '28px', padding: '0 8px', fontSize: '11px', borderRadius: 'var(--rounded-sm)', flex: 1 }}
-                              value={q.status}
-                              onChange={(e) => handleUpdateStatus(q.id, e.target.value)}
-                              disabled={submittingAction}
-                            >
-                              <option value="pending">Pending</option>
-                              <option value="replied">Replied</option>
-                              <option value="resolved">Resolved</option>
-                            </select>
-                          </div>
+                          )}
                         </div>
                       </td>
                     </tr>
