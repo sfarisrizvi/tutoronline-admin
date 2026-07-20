@@ -353,6 +353,10 @@ export default function AdminTutors() {
   // Toggle Verification Badge
   const toggleVerification = async () => {
     if (!selectedTutor || adminRole === 'monitor') return;
+    if (selectedTutor.kyc_status !== 'approved') {
+      alert("Tutor is not eligible for verified badge until their KYC status is approved.");
+      return;
+    }
     const nextVerifiedState = !selectedTutor.verified;
     
     setSubmittingAction(true);
@@ -569,7 +573,7 @@ export default function AdminTutors() {
                     </td>
                     <td onClick={(e) => e.stopPropagation()}>
                       <a 
-                        href={`http://localhost:3000/tutors/${tutor.id}`} 
+                        href={`https://tutoronline.pk/tutors/${tutor.id}`} 
                         target="_blank" 
                         rel="noopener noreferrer"
                         className="admin-btn admin-btn-secondary"
@@ -652,23 +656,52 @@ export default function AdminTutors() {
             <div style={{ flex: 1, padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
               
               {/* Profile card summary */}
-              <div style={{ display: 'flex', gap: '16px', alignItems: 'center', padding: '16px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-lg)', backgroundColor: 'var(--surface-soft)' }}>
-                {selectedTutor.avatar_url ? (
-                  <img 
-                    src={selectedTutor.avatar_url.startsWith('http') ? selectedTutor.avatar_url : `https://qlhcavfyllfcwifxbtbu.supabase.co/storage/v1/object/public/teacher-media/${selectedTutor.avatar_url}`}
-                    alt="" 
-                    style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover' }}
-                  />
-                ) : (
-                  <div style={{ width: '56px', height: '56px', borderRadius: '50%', backgroundColor: 'var(--canvas)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '18px', color: 'var(--steel)' }}>
-                    {selectedTutor.full_name?.substring(0, 2).toUpperCase() || 'TR'}
+              <div style={{ display: 'flex', gap: '16px', alignItems: 'center', justifyContent: 'space-between', padding: '16px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-lg)', backgroundColor: 'var(--surface-soft)' }}>
+                <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flex: 1 }}>
+                  {selectedTutor.avatar_url ? (
+                    <img 
+                      src={selectedTutor.avatar_url.startsWith('http') ? selectedTutor.avatar_url : `https://qlhcavfyllfcwifxbtbu.supabase.co/storage/v1/object/public/teacher-media/${selectedTutor.avatar_url}`}
+                      alt="" 
+                      style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <div style={{ width: '56px', height: '56px', borderRadius: '50%', backgroundColor: 'var(--canvas)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '18px', color: 'var(--steel)' }}>
+                      {selectedTutor.full_name?.substring(0, 2).toUpperCase() || 'TR'}
+                    </div>
+                  )}
+                  <div>
+                    <h4 style={{ margin: '0 0 4px 0', fontSize: '16px' }}>{selectedTutor.full_name}</h4>
+                    <span style={{ fontSize: '12px', color: 'var(--steel)', display: 'block' }}>{selectedTutor.email}</span>
+                    <span style={{ fontSize: '12px', color: 'var(--steel)', display: 'block' }}>{selectedTutor.phone || 'No phone'}</span>
                   </div>
-                )}
-                <div>
-                  <h4 style={{ margin: '0 0 4px 0', fontSize: '16px' }}>{selectedTutor.full_name}</h4>
-                  <span style={{ fontSize: '12px', color: 'var(--steel)', display: 'block' }}>{selectedTutor.email}</span>
-                  <span style={{ fontSize: '12px', color: 'var(--steel)', display: 'block' }}>{selectedTutor.phone || 'No phone'}</span>
                 </div>
+
+                {/* Verification Shield Icon */}
+                <button
+                  onClick={toggleVerification}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: selectedTutor.kyc_status === 'approved' ? 'pointer' : 'not-allowed',
+                    padding: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: selectedTutor.kyc_status === 'approved' ? 1 : 0.4
+                  }}
+                  title={selectedTutor.kyc_status === 'approved' ? (selectedTutor.verified ? "Remove Verified Badge" : "Give Verified Badge") : "Approve KYC first then verify the profile."}
+                  disabled={submittingAction}
+                >
+                  <img 
+                    src="/shield.svg" 
+                    alt="Verified" 
+                    style={{ 
+                      width: '32px', 
+                      height: '32px', 
+                      filter: selectedTutor.verified ? 'none' : 'grayscale(100%) contrast(50%)' 
+                    }} 
+                  />
+                </button>
               </div>
 
               {/* Status Banner */}

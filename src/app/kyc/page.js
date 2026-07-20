@@ -29,12 +29,12 @@ export default function KYCReview() {
   const [adminRole, setAdminRole] = useState('super_admin');
 
   // Filter & Search states
-  const [filterMode, setFilterMode] = useState('pending'); // 'pending' | 'rejected' | 'approved'
+  const [filterMode, setFilterMode] = useState('pending_onboarding'); // 'pending_onboarding' | 'pending' | 'rejected' | 'approved'
   const [searchQuery, setSearchQuery] = useState('');
   const [page, setPage] = useState(1);
   const [pageSize] = useState(10);
   const [totalCount, setTotalCount] = useState(0);
-  const [counts, setCounts] = useState({ pending: 0, rejected: 0, approved: 0 });
+  const [counts, setCounts] = useState({ pending_onboarding: 0, pending: 0, rejected: 0, approved: 0 });
   const [reloadTrigger, setReloadTrigger] = useState(0);
 
   // Selected Tutor Drawer state
@@ -132,14 +132,16 @@ export default function KYCReview() {
       const supabase = createClient();
       try {
         // Fetch queue metrics counts
-        const [pendingRes, rejectedRes, approvedRes] = await Promise.all([
-          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('kyc_status', 'pending'),
-          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('kyc_status', 'rejected'),
-          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('kyc_status', 'approved')
+        const [pendingOnboardingRes, pendingRes, rejectedRes, approvedRes] = await Promise.all([
+          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', false),
+          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'pending'),
+          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'rejected'),
+          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'approved')
         ]);
 
         if (active) {
           setCounts({
+            pending_onboarding: pendingOnboardingRes.count || 0,
             pending: pendingRes.count || 0,
             rejected: rejectedRes.count || 0,
             approved: approvedRes.count || 0
@@ -148,12 +150,14 @@ export default function KYCReview() {
 
         // Fetch paginated queue items
         let query = supabase.from('tutor_profiles').select('*', { count: 'exact' });
-        if (filterMode === 'pending') {
-          query = query.eq('kyc_status', 'pending');
+        if (filterMode === 'pending_onboarding') {
+          query = query.eq('onboarding_complete', false);
+        } else if (filterMode === 'pending') {
+          query = query.eq('onboarding_complete', true).eq('kyc_status', 'pending');
         } else if (filterMode === 'rejected') {
-          query = query.eq('kyc_status', 'rejected');
+          query = query.eq('onboarding_complete', true).eq('kyc_status', 'rejected');
         } else if (filterMode === 'approved') {
-          query = query.eq('kyc_status', 'approved');
+          query = query.eq('onboarding_complete', true).eq('kyc_status', 'approved');
         }
 
         if (searchQuery.trim() !== '') {
@@ -188,6 +192,50 @@ export default function KYCReview() {
   const handleSearchChange = (e) => {
     setSearchQuery(e.target.value);
     setPage(1);
+  };
+
+  // Verify single document
+  const handleVerifyDoc = async (key, status, reason = '') => {
+    if (!selectedTutor || adminRole === 'monitor') return;
+    const supabase = createClient();
+    
+    const currentVerifications = selectedTutor.kyc_verifications || {};
+    const newVerifications = {
+      ...currentVerifications,
+      [key]: {
+        status,
+        reason,
+        verified_at: new Date().toISOString()
+      }
+    };
+    
+    setSubmittingAction(true);
+    try {
+      const { error } = await supabase
+        .from('tutor_profiles')
+        .update({ kyc_verifications: newVerifications })
+        .eq('id', selectedTutor.id);
+        
+      if (error) throw error;
+      
+      // Update local state
+      setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_verifications: newVerifications } : t));
+      setSelectedTutor(prev => ({ ...prev, kyc_verifications: newVerifications }));
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      setSubmittingAction(false);
+    }
+  };
+
+  const handleRejectDoc = (key) => {
+    const reason = prompt(`Enter rejection reason for ${key.replace('_', ' ')}:`);
+    if (reason === null) return; // cancelled
+    if (!reason.trim()) {
+      alert("Rejection reason is required.");
+      return;
+    }
+    handleVerifyDoc(key, 'rejected', reason.trim());
   };
 
   // Load private signed URLs when a tutor is selected
@@ -334,6 +382,10 @@ export default function KYCReview() {
   // Toggle Verification Badge
   const toggleVerification = async () => {
     if (!selectedTutor || adminRole === 'monitor') return;
+    if (selectedTutor.kyc_status !== 'approved') {
+      alert("Tutor is not eligible for verified badge until their KYC status is approved.");
+      return;
+    }
     const nextVerifiedState = !selectedTutor.verified;
     
     setSubmittingAction(true);
@@ -378,7 +430,22 @@ export default function KYCReview() {
       <div className="container" style={{ paddingBottom: 'var(--spacing-xl)', flex: 1, maxWidth: '100%', width: '100%' }}>
         
         {/* Metric cards filters */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--spacing-md)', marginBottom: 'var(--spacing-lg)' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--spacing-md)', marginBottom: 'var(--spacing-lg)' }}>
+          <div 
+            onClick={() => handleFilterModeChange('pending_onboarding')}
+            style={{ 
+              backgroundColor: 'var(--canvas)', 
+              padding: 'var(--spacing-md)', 
+              borderRadius: 'var(--rounded-lg)',
+              border: filterMode === 'pending_onboarding' ? '2px solid var(--steel)' : '1px solid var(--hairline)',
+              cursor: 'pointer',
+              boxShadow: 'var(--shadow-subtle)'
+            }}
+          >
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>Pending Onboarding</span>
+            <h2 style={{ margin: '4px 0 0 0', color: 'var(--steel)' }}>{counts.pending_onboarding}</h2>
+          </div>
+
           <div 
             onClick={() => handleFilterModeChange('pending')}
             style={{ 
@@ -390,7 +457,7 @@ export default function KYCReview() {
               boxShadow: 'var(--shadow-subtle)'
             }}
           >
-            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>Pending Reviews</span>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>Pending KYC</span>
             <h2 style={{ margin: '4px 0 0 0', color: 'var(--accent-orange)' }}>{counts.pending}</h2>
           </div>
 
@@ -583,23 +650,52 @@ export default function KYCReview() {
 
             <div style={{ flex: 1, padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
               
-              <div style={{ display: 'flex', gap: '16px', alignItems: 'center', padding: '16px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-lg)', backgroundColor: 'var(--surface-soft)' }}>
-                {selectedTutor.avatar_url ? (
-                  <img 
-                    src={selectedTutor.avatar_url.startsWith('http') ? selectedTutor.avatar_url : `https://qlhcavfyllfcwifxbtbu.supabase.co/storage/v1/object/public/teacher-media/${selectedTutor.avatar_url}`}
-                    alt="" 
-                    style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover' }}
-                  />
-                ) : (
-                  <div style={{ width: '56px', height: '56px', borderRadius: '50%', backgroundColor: 'var(--canvas)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '18px', color: 'var(--steel)' }}>
-                    {selectedTutor.full_name?.substring(0, 2).toUpperCase() || 'TR'}
+              <div style={{ display: 'flex', gap: '16px', alignItems: 'center', justifyContent: 'space-between', padding: '16px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-lg)', backgroundColor: 'var(--surface-soft)' }}>
+                <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flex: 1 }}>
+                  {selectedTutor.avatar_url ? (
+                    <img 
+                      src={selectedTutor.avatar_url.startsWith('http') ? selectedTutor.avatar_url : `https://qlhcavfyllfcwifxbtbu.supabase.co/storage/v1/object/public/teacher-media/${selectedTutor.avatar_url}`}
+                      alt="" 
+                      style={{ width: '56px', height: '56px', borderRadius: '50%', objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <div style={{ width: '56px', height: '56px', borderRadius: '50%', backgroundColor: 'var(--canvas)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 'bold', fontSize: '18px', color: 'var(--steel)' }}>
+                      {selectedTutor.full_name?.substring(0, 2).toUpperCase() || 'TR'}
+                    </div>
+                  )}
+                  <div>
+                    <h4 style={{ margin: '0 0 4px 0', fontSize: '16px' }}>{selectedTutor.full_name}</h4>
+                    <span style={{ fontSize: '12px', color: 'var(--steel)', display: 'block' }}>{selectedTutor.email}</span>
+                    <span style={{ fontSize: '12px', color: 'var(--steel)', display: 'block' }}>{selectedTutor.phone || 'No phone'}</span>
                   </div>
-                )}
-                <div>
-                  <h4 style={{ margin: '0 0 4px 0', fontSize: '16px' }}>{selectedTutor.full_name}</h4>
-                  <span style={{ fontSize: '12px', color: 'var(--steel)', display: 'block' }}>{selectedTutor.email}</span>
-                  <span style={{ fontSize: '12px', color: 'var(--steel)', display: 'block' }}>{selectedTutor.phone || 'No phone'}</span>
                 </div>
+
+                {/* Verification Shield Icon */}
+                <button
+                  onClick={toggleVerification}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: selectedTutor.kyc_status === 'approved' ? 'pointer' : 'not-allowed',
+                    padding: '8px',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    opacity: selectedTutor.kyc_status === 'approved' ? 1 : 0.4
+                  }}
+                  title={selectedTutor.kyc_status === 'approved' ? (selectedTutor.verified ? "Remove Verified Badge" : "Give Verified Badge") : "Approve KYC first then verify the profile."}
+                  disabled={submittingAction}
+                >
+                  <img 
+                    src="/shield.svg" 
+                    alt="Verified" 
+                    style={{ 
+                      width: '32px', 
+                      height: '32px', 
+                      filter: selectedTutor.verified ? 'none' : 'grayscale(100%) contrast(50%)' 
+                    }} 
+                  />
+                </button>
               </div>
 
               <div>
@@ -648,61 +744,100 @@ export default function KYCReview() {
                     {Object.keys(selectedTutor.kyc_docs).map((key) => {
                       const docUrl = signedUrls[key];
                       const isArray = Array.isArray(docUrl);
+                      const vState = selectedTutor.kyc_verifications?.[key];
+                      const docStatus = vState?.status || 'pending';
 
                       return (
-                        <div key={key} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-md)', backgroundColor: 'var(--surface-soft)' }}>
-                          <span style={{ fontSize: '13px', textTransform: 'capitalize', fontWeight: 500 }}>
-                            {key.replace('_', ' ')}
-                          </span>
+                        <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-md)', backgroundColor: 'var(--surface-soft)' }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                              <span style={{ fontSize: '13px', textTransform: 'capitalize', fontWeight: 500 }}>
+                                {key.replace('_', ' ')}
+                              </span>
+                              {docStatus === 'approved' ? (
+                                <span style={{ fontSize: '10px', color: 'var(--brand-green-dark)', backgroundColor: 'var(--brand-green-soft)', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>Verified</span>
+                              ) : docStatus === 'rejected' ? (
+                                <span 
+                                  style={{ fontSize: '10px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, cursor: 'help' }}
+                                  title={`Objection: ${vState.reason}`}
+                                >
+                                  Rejected (?)
+                                </span>
+                              ) : (
+                                <span style={{ fontSize: '10px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>Unverified</span>
+                              )}
+                            </div>
 
-                          <div style={{ display: 'flex', gap: '6px' }}>
-                            {isArray ? (
-                              docUrl.map((url, i) => (
-                                <div key={i} style={{ display: 'flex', gap: '4px' }}>
-                                  <button
-                                    onClick={() => setLightbox({ isOpen: true, url, title: `${key.replace('_', ' ')} (${i + 1})`, docKey: key })}
-                                    className="admin-btn admin-btn-secondary"
-                                    style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px' }}
-                                  >
-                                    <Eye size={12} /> {i + 1}
-                                  </button>
-                                  <a
-                                    href={url}
-                                    download
-                                    target="_blank"
-                                    rel="noopener noreferrer"
-                                    className="admin-btn admin-btn-secondary"
-                                    style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', display: 'flex', alignItems: 'center' }}
-                                    title="Download document file"
-                                  >
-                                    <Download size={12} />
-                                  </a>
-                                </div>
-                              ))
-                            ) : (
-                              <div style={{ display: 'flex', gap: '6px' }}>
+                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                              {isArray ? (
+                                docUrl.map((url, i) => (
+                                  <div key={i} style={{ display: 'flex', gap: '4px' }}>
+                                    <button
+                                      onClick={() => setLightbox({ isOpen: true, url, title: `${key.replace('_', ' ')} (${i + 1})`, docKey: key })}
+                                      className="admin-btn admin-btn-secondary"
+                                      style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px' }}
+                                    >
+                                      <Eye size={12} /> {i + 1}
+                                    </button>
+                                  </div>
+                                ))
+                              ) : (
                                 <button
                                   onClick={() => docUrl && setLightbox({ isOpen: true, url: docUrl, title: key.replace('_', ' '), docKey: key })}
                                   className="admin-btn admin-btn-secondary"
-                                  style={{ padding: '6px 10px', fontSize: '11px', borderRadius: '4px' }}
+                                  style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px' }}
                                   disabled={!docUrl}
                                 >
                                   <Eye size={12} /> View
                                 </button>
-                                <a
-                                  href={docUrl}
-                                  download
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="admin-btn admin-btn-secondary"
-                                  style={{ padding: '6px 10px', fontSize: '11px', borderRadius: '4px', display: 'flex', alignItems: 'center', pointerEvents: docUrl ? 'auto' : 'none', opacity: docUrl ? 1 : 0.5 }}
-                                  title="Download document file"
-                                >
-                                  <Download size={12} />
-                                </a>
-                              </div>
-                            )}
+                              )}
+
+                              {/* Green Check (Approve) */}
+                              <button
+                                onClick={() => handleVerifyDoc(key, 'approved')}
+                                style={{
+                                  backgroundColor: docStatus === 'approved' ? 'var(--brand-green-soft)' : 'transparent',
+                                  border: '1px solid ' + (docStatus === 'approved' ? 'var(--brand-green-dark)' : 'var(--hairline)'),
+                                  color: docStatus === 'approved' ? 'var(--brand-green-dark)' : 'var(--steel)',
+                                  cursor: 'pointer',
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center'
+                                }}
+                                disabled={adminRole === 'monitor' || submittingAction}
+                                title="Approve document"
+                              >
+                                <Check size={12} />
+                              </button>
+
+                              {/* Red Cross (Reject) */}
+                              <button
+                                onClick={() => handleRejectDoc(key)}
+                                style={{
+                                  backgroundColor: docStatus === 'rejected' ? '#FEE2E2' : 'transparent',
+                                  border: '1px solid ' + (docStatus === 'rejected' ? '#EF4444' : 'var(--hairline)'),
+                                  color: docStatus === 'rejected' ? '#EF4444' : 'var(--steel)',
+                                  cursor: 'pointer',
+                                  padding: '4px 8px',
+                                  borderRadius: '4px',
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'center'
+                                }}
+                                disabled={adminRole === 'monitor' || submittingAction}
+                                title="Reject document"
+                              >
+                                <X size={12} />
+                              </button>
+                            </div>
                           </div>
+                          {docStatus === 'rejected' && vState?.reason && (
+                            <div style={{ fontSize: '11px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '6px 10px', borderRadius: '4px', border: '1px solid #FECACA' }}>
+                              <strong>Objection:</strong> {vState.reason}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -783,15 +918,6 @@ export default function KYCReview() {
                   )}
 
                   <div style={{ display: 'flex', gap: '12px' }}>
-                    {/* Toggle Verified Badge Button */}
-                    <button 
-                      onClick={toggleVerification} 
-                      className={`admin-btn ${selectedTutor.verified ? 'admin-btn-secondary' : 'admin-btn-primary'}`} 
-                      style={{ flex: 1 }}
-                      disabled={submittingAction}
-                    >
-                      {selectedTutor.verified ? 'Remove Verified' : 'Give Verified Badge'}
-                    </button>
 
                     <button 
                       onClick={toggleSuspension} 
