@@ -21,10 +21,15 @@ const verifySuperAdmin = async (supabase) => {
   const { data: { user }, error } = await supabase.auth.getUser();
   if (error || !user) return false;
   
-  const isUserAdmin = user.user_metadata?.role === 'admin';
-  const adminRole = user.user_metadata?.admin_role || 'super_admin';
+  const { data: roleData, error: roleError } = await supabase
+    .from('user_roles')
+    .select('role, admin_role')
+    .eq('user_id', user.id)
+    .maybeSingle();
+    
+  if (roleError || !roleData) return false;
   
-  return isUserAdmin && adminRole === 'super_admin';
+  return roleData.role === 'admin' && roleData.admin_role === 'super_admin';
 };
 
 export async function GET(request) {
@@ -43,14 +48,26 @@ export async function GET(request) {
       return NextResponse.json({ error: listError.message }, { status: 500 });
     }
 
-    // Filter for users who are admins
+    // Fetch secure roles from DB
+    const { data: secureRoles, error: rolesError } = await supabaseAdmin
+      .from('user_roles')
+      .select('user_id, role, admin_role')
+      .eq('role', 'admin');
+
+    if (rolesError) {
+      return NextResponse.json({ error: rolesError.message }, { status: 500 });
+    }
+
+    const adminRoleMap = new Map(secureRoles.map(r => [r.user_id, r.admin_role]));
+
+    // Filter for users who are secure admins
     const admins = users
-      .filter(u => u.user_metadata?.role === 'admin')
+      .filter(u => adminRoleMap.has(u.id))
       .map(u => ({
         id: u.id,
         email: u.email,
         full_name: u.user_metadata?.full_name || 'Unnamed Admin',
-        admin_role: u.user_metadata?.admin_role || 'super_admin',
+        admin_role: adminRoleMap.get(u.id),
         created_at: u.created_at
       }));
 
@@ -95,13 +112,36 @@ export async function POST(request) {
       return NextResponse.json({ error: createError.message }, { status: 500 });
     }
 
+    // 1. Securely set the role inside public.user_roles (which was initially defaulted by trigger to tutor)
+    const { error: roleError } = await supabaseAdmin
+      .from('user_roles')
+      .upsert({
+        user_id: data.user.id,
+        role: 'admin',
+        admin_role
+      });
+
+    if (roleError) {
+      console.error('Role update error:', roleError);
+    }
+
+    // 2. Delete default tutor profile created for admin user
+    const { error: delError } = await supabaseAdmin
+      .from('tutor_profiles')
+      .delete()
+      .eq('id', data.user.id);
+
+    if (delError) {
+      console.error('Default tutor profile deletion warning:', delError);
+    }
+
     return NextResponse.json({ 
       success: true, 
       user: {
         id: data.user.id,
         email: data.user.email,
         full_name: data.user.user_metadata?.full_name,
-        admin_role: data.user.user_metadata?.admin_role
+        admin_role
       } 
     });
   } catch (err) {

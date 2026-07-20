@@ -23,7 +23,6 @@ export default function AdminConversations() {
   // Search autocomplete states
   const [searchQuery, setSearchQuery] = useState('');
   const [allUsers, setAllUsers] = useState([]); // List of { id, name, email, phone, role, avatar_url, city }
-  const [suggestions, setSuggestions] = useState([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [selectedUser, setSelectedUser] = useState(null);
 
@@ -93,6 +92,13 @@ export default function AdminConversations() {
     }
   };
 
+  // Derive autocomplete suggestions on the fly during render to prevent state warning traps
+  const suggestions = searchQuery.trim() === '' ? [] : allUsers.filter(u => 
+    (u.name && u.name.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (u.email && u.email.toLowerCase().includes(searchQuery.toLowerCase())) ||
+    (u.phone && u.phone.includes(searchQuery))
+  ).slice(0, 5);
+
   useEffect(() => {
     const checkAuth = async () => {
       const supabase = createClient();
@@ -104,32 +110,60 @@ export default function AdminConversations() {
       }
       setAdminUser(user);
       setAdminRole(user.user_metadata?.admin_role || 'super_admin');
+
+      // Unified initialization fetch
+      try {
+        const [
+          { data: tutors },
+          { data: clients }
+        ] = await Promise.all([
+          supabase.from('tutor_profiles').select('id, full_name, email, phone, avatar_url, city, kyc_status'),
+          supabase.from('client_profiles').select('id, full_name, email, phone, avatar_url, city, client_type')
+        ]);
+
+        const unified = [];
+        const lookup = {};
+
+        lookup[user.id] = { name: 'Support Admin (You)', email: user.email, role: 'admin' };
+
+        tutors?.forEach(t => {
+          const item = {
+            id: t.id,
+            name: t.full_name || 'Unnamed Tutor',
+            email: t.email,
+            phone: t.phone || '',
+            role: 'tutor',
+            avatar_url: t.avatar_url,
+            city: t.city
+          };
+          unified.push(item);
+          lookup[t.id] = { name: item.name, email: item.email, role: 'tutor', avatar_url: t.avatar_url };
+        });
+
+        clients?.forEach(c => {
+          const item = {
+            id: c.id,
+            name: c.full_name || 'Unnamed Client',
+            email: c.email,
+            phone: c.phone || '',
+            role: 'client',
+            avatar_url: c.avatar_url,
+            city: c.city
+          };
+          unified.push(item);
+          lookup[c.id] = { name: item.name, email: item.email, role: 'client', avatar_url: c.avatar_url };
+        });
+
+        setAllUsers(unified);
+        setUsersLookup(lookup);
+      } catch (err) {
+        console.error('Error fetching users lookup list:', err);
+      } finally {
+        setLoading(false);
+      }
     };
     checkAuth();
   }, [router]);
-
-  useEffect(() => {
-    if (adminUser) {
-      fetchUsersAndBuildLookup();
-    }
-  }, [adminUser]);
-
-  // Autocomplete filter effect
-  useEffect(() => {
-    if (searchQuery.trim() === '') {
-      setSuggestions([]);
-      return;
-    }
-
-    const q = searchQuery.toLowerCase();
-    const filtered = allUsers.filter(u => 
-      u.name.toLowerCase().includes(q) ||
-      u.email.toLowerCase().includes(q) ||
-      u.phone.includes(q)
-    ).slice(0, 5); // Limit suggestions to 5 items
-
-    setSuggestions(filtered);
-  }, [searchQuery, allUsers]);
 
   // Load conversations for the selected user
   const handleSelectUser = async (userItem) => {

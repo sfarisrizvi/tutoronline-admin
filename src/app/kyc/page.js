@@ -31,6 +31,11 @@ export default function KYCReview() {
   // Filter & Search states
   const [filterMode, setFilterMode] = useState('pending'); // 'pending' | 'rejected' | 'approved'
   const [searchQuery, setSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(10);
+  const [totalCount, setTotalCount] = useState(0);
+  const [counts, setCounts] = useState({ pending: 0, rejected: 0, approved: 0 });
+  const [reloadTrigger, setReloadTrigger] = useState(0);
 
   // Selected Tutor Drawer state
   const [selectedTutor, setSelectedTutor] = useState(null);
@@ -103,24 +108,7 @@ export default function KYCReview() {
     setActiveAnnotationText('');
   };
 
-  const fetchTutors = async () => {
-    setLoading(true);
-    const supabase = createClient();
-    try {
-      const { data, error } = await supabase
-        .from('tutor_profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      setTutors(data || []);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
+  // Unified authentication check
   useEffect(() => {
     const checkAuth = async () => {
       const supabase = createClient();
@@ -132,16 +120,83 @@ export default function KYCReview() {
       }
       setAdminUser(user);
       setAdminRole(user.user_metadata?.admin_role || 'super_admin');
-      fetchTutors();
     };
     checkAuth();
   }, [router]);
 
+  // Unified fetching hook for counts and queue items
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      setLoading(true);
+      const supabase = createClient();
+      try {
+        // Fetch queue metrics counts
+        const [pendingRes, rejectedRes, approvedRes] = await Promise.all([
+          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('kyc_status', 'pending'),
+          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('kyc_status', 'rejected'),
+          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('kyc_status', 'approved')
+        ]);
+
+        if (active) {
+          setCounts({
+            pending: pendingRes.count || 0,
+            rejected: rejectedRes.count || 0,
+            approved: approvedRes.count || 0
+          });
+        }
+
+        // Fetch paginated queue items
+        let query = supabase.from('tutor_profiles').select('*', { count: 'exact' });
+        if (filterMode === 'pending') {
+          query = query.eq('kyc_status', 'pending');
+        } else if (filterMode === 'rejected') {
+          query = query.eq('kyc_status', 'rejected');
+        } else if (filterMode === 'approved') {
+          query = query.eq('kyc_status', 'approved');
+        }
+
+        if (searchQuery.trim() !== '') {
+          const q = searchQuery.trim();
+          query = query.or(`full_name.ilike.%${q}%,email.ilike.%${q}%,phone.like.%${q}%`);
+        }
+
+        const { data, error, count } = await query
+          .order('created_at', { ascending: false })
+          .range((page - 1) * pageSize, page * pageSize - 1);
+
+        if (error) throw error;
+        if (active) {
+          setTutors(data || []);
+          setTotalCount(count || 0);
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    load();
+    return () => { active = false; };
+  }, [page, pageSize, filterMode, searchQuery, reloadTrigger]);
+
+  const handleFilterModeChange = (mode) => {
+    setFilterMode(mode);
+    setPage(1);
+  };
+
+  const handleSearchChange = (e) => {
+    setSearchQuery(e.target.value);
+    setPage(1);
+  };
+
   // Load private signed URLs when a tutor is selected
   useEffect(() => {
     if (!selectedTutor) {
-      setSignedUrls({});
-      return;
+      const timer = setTimeout(() => {
+        setSignedUrls({});
+      }, 0);
+      return () => clearTimeout(timer);
     }
 
     const loadUrls = async () => {
@@ -302,35 +357,7 @@ export default function KYCReview() {
     }
   };
 
-  // Filter list locally for KYC page
-  const getFilteredTutors = () => {
-    let list = tutors;
-
-    if (filterMode === 'pending') {
-      list = list.filter(t => t.kyc_status === 'pending');
-    } else if (filterMode === 'rejected') {
-      list = list.filter(t => t.kyc_status === 'rejected');
-    } else if (filterMode === 'approved') {
-      list = list.filter(t => t.kyc_status === 'approved');
-    }
-
-    if (searchQuery.trim() !== '') {
-      const q = searchQuery.toLowerCase();
-      list = list.filter(t => 
-        (t.full_name && t.full_name.toLowerCase().includes(q)) ||
-        (t.email && t.email.toLowerCase().includes(q)) ||
-        (t.phone && t.phone.includes(q))
-      );
-    }
-
-    return list;
-  };
-
-  const filteredTutors = getFilteredTutors();
-
-  const totalPending = tutors.filter(t => t.kyc_status === 'pending').length;
-  const totalInReview = tutors.filter(t => t.kyc_status === 'rejected').length; // Rejected = In Review with objections
-  const totalApproved = tutors.filter(t => t.kyc_status === 'approved').length;
+  const filteredTutors = tutors;
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
@@ -342,7 +369,7 @@ export default function KYCReview() {
             <h1>KYC Verification Queue</h1>
             <p>Vet credentials, analyze degrees, flag document corrections, and issue verified badges.</p>
           </div>
-          <button className="admin-btn admin-btn-secondary" onClick={fetchTutors}>
+          <button className="admin-btn admin-btn-secondary" onClick={() => setReloadTrigger(t => t + 1)}>
             <RefreshCw size={14} /> Refresh Queue
           </button>
         </div>
@@ -353,7 +380,7 @@ export default function KYCReview() {
         {/* Metric cards filters */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--spacing-md)', marginBottom: 'var(--spacing-lg)' }}>
           <div 
-            onClick={() => setFilterMode('pending')}
+            onClick={() => handleFilterModeChange('pending')}
             style={{ 
               backgroundColor: 'var(--canvas)', 
               padding: 'var(--spacing-md)', 
@@ -364,11 +391,11 @@ export default function KYCReview() {
             }}
           >
             <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>Pending Reviews</span>
-            <h2 style={{ margin: '4px 0 0 0', color: 'var(--accent-orange)' }}>{totalPending}</h2>
+            <h2 style={{ margin: '4px 0 0 0', color: 'var(--accent-orange)' }}>{counts.pending}</h2>
           </div>
 
           <div 
-            onClick={() => setFilterMode('rejected')}
+            onClick={() => handleFilterModeChange('rejected')}
             style={{ 
               backgroundColor: 'var(--canvas)', 
               padding: 'var(--spacing-md)', 
@@ -379,11 +406,11 @@ export default function KYCReview() {
             }}
           >
             <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>In Review (Objections)</span>
-            <h2 style={{ margin: '4px 0 0 0', color: 'var(--accent-purple)' }}>{totalInReview}</h2>
+            <h2 style={{ margin: '4px 0 0 0', color: 'var(--accent-purple)' }}>{counts.rejected}</h2>
           </div>
 
           <div 
-            onClick={() => setFilterMode('approved')}
+            onClick={() => handleFilterModeChange('approved')}
             style={{ 
               backgroundColor: 'var(--canvas)', 
               padding: 'var(--spacing-md)', 
@@ -394,7 +421,7 @@ export default function KYCReview() {
             }}
           >
             <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>Approved KYC</span>
-            <h2 style={{ margin: '4px 0 0 0', color: 'var(--brand-green)' }}>{totalApproved}</h2>
+            <h2 style={{ margin: '4px 0 0 0', color: 'var(--brand-green)' }}>{counts.approved}</h2>
           </div>
         </div>
 
@@ -407,7 +434,7 @@ export default function KYCReview() {
             style={{ border: 'none', background: 'transparent', color: 'var(--ink)', width: '100%', height: 'auto', padding: 0 }}
             placeholder="Search tutors by name, email or number..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={handleSearchChange}
           />
         </div>
 
@@ -433,10 +460,10 @@ export default function KYCReview() {
                 {filteredTutors.map((tutor, idx) => (
                   <tr 
                     key={tutor.id} 
-                    onClick={() => setSelectedTutor(tutor)}
+                    onClick={() => { setSelectedTutor(tutor); setSignedUrls({}); }}
                     style={{ cursor: 'pointer' }}
                   >
-                    <td>{idx + 1}</td>
+                    <td>{(page - 1) * pageSize + idx + 1}</td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         {tutor.avatar_url ? (
@@ -490,6 +517,42 @@ export default function KYCReview() {
                 ))}
               </tbody>
             </table>
+          )}
+
+          {/* Pagination Controls */}
+          {totalCount > 0 && (
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center', 
+              marginTop: '16px', 
+              padding: '12px 16px', 
+              backgroundColor: 'var(--canvas)', 
+              borderRadius: 'var(--rounded-lg)',
+              border: '1px solid var(--hairline)'
+            }}>
+              <span style={{ fontSize: '13px', color: 'var(--steel)' }}>
+                Showing <strong>{totalCount === 0 ? 0 : (page - 1) * pageSize + 1}</strong> to <strong>{Math.min(page * pageSize, totalCount)}</strong> of <strong>{totalCount}</strong> tutors
+              </span>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button 
+                  className="admin-btn admin-btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '13px' }}
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                >
+                  Previous
+                </button>
+                <button 
+                  className="admin-btn admin-btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '13px' }}
+                  onClick={() => setPage(p => p + 1)}
+                  disabled={page * pageSize >= totalCount}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           )}
         </div>
 

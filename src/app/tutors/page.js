@@ -32,9 +32,13 @@ export default function AdminTutors() {
   const [adminUser, setAdminUser] = useState(null);
   const [adminRole, setAdminRole] = useState('super_admin');
 
-  // Filter & Search states
+  // Filter, Search, Pagination
   const [filterMode, setFilterMode] = useState('all'); // 'all' | 'pending' | 'verified' | 'suspended'
   const [searchQuery, setSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(15);
+  const [totalCount, setTotalCount] = useState(0);
+  const [metrics, setMetrics] = useState({ total: 0, pending: 0, verified: 0, suspended: 0 });
 
   // Selected Tutor Drawer state
   const [selectedTutor, setSelectedTutor] = useState(null);
@@ -72,6 +76,83 @@ export default function AdminTutors() {
     setAnnMode(false);
   };
 
+  const fetchMetrics = async () => {
+    const supabase = createClient();
+    try {
+      const [
+        { count: total },
+        { count: pending },
+        { count: verified },
+        { count: suspended }
+      ] = await Promise.all([
+        supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }),
+        supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('kyc_status', 'pending'),
+        supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('verified', true),
+        supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('suspended', true)
+      ]);
+      setMetrics({
+        total: total || 0,
+        pending: pending || 0,
+        verified: verified || 0,
+        suspended: suspended || 0
+      });
+    } catch (err) {
+      console.error('Error fetching tutor metrics:', err);
+    }
+  };
+
+  const handleFilterModeChange = (mode) => {
+    setFilterMode(mode);
+    setPage(1);
+  };
+
+  const handleSearchChange = (val) => {
+    setSearchQuery(val);
+    setPage(1);
+  };
+
+  // Fetch tutors when dependencies update
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      setLoading(true);
+      const supabase = createClient();
+      try {
+        let query = supabase
+          .from('tutor_profiles')
+          .select('*', { count: 'exact' });
+
+        if (filterMode === 'pending') {
+          query = query.eq('kyc_status', 'pending');
+        } else if (filterMode === 'verified') {
+          query = query.eq('verified', true);
+        } else if (filterMode === 'suspended') {
+          query = query.eq('suspended', true);
+        }
+
+        if (searchQuery.trim() !== '') {
+          query = query.or(`full_name.ilike.%${searchQuery}%,email.ilike.%${searchQuery}%,phone.ilike.%${searchQuery}%`);
+        }
+
+        const { data, error, count } = await query
+          .order('created_at', { ascending: false })
+          .range((page - 1) * pageSize, page * pageSize - 1);
+
+        if (error) throw error;
+        if (active) {
+          setTutors(data || []);
+          setTotalCount(count || 0);
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    load();
+    return () => { active = false; };
+  }, [page, filterMode, searchQuery, pageSize]);
+
   const handleSaveAnnotation = () => {
     if (!activeAnnotationText.trim() || !newAnnCoords || !lightbox.docKey) return;
     
@@ -107,24 +188,6 @@ export default function AdminTutors() {
     setActiveAnnotationText('');
   };
 
-  const fetchTutors = async () => {
-    setLoading(true);
-    const supabase = createClient();
-    try {
-      const { data, error } = await supabase
-        .from('tutor_profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      setTutors(data || []);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   useEffect(() => {
     const checkAuth = async () => {
       const supabase = createClient();
@@ -136,7 +199,7 @@ export default function AdminTutors() {
       }
       setAdminUser(user);
       setAdminRole(user.user_metadata?.admin_role || 'super_admin');
-      fetchTutors();
+      fetchMetrics();
     };
     checkAuth();
   }, [router]);
@@ -144,10 +207,10 @@ export default function AdminTutors() {
   // Load private signed URLs when a tutor is selected
   useEffect(() => {
     if (!selectedTutor) {
-      setSignedUrls({});
       return;
     }
 
+    let active = true;
     const loadUrls = async () => {
       setLoadingDocs(true);
       const supabase = createClient();
@@ -156,6 +219,7 @@ export default function AdminTutors() {
 
       try {
         for (const key of Object.keys(kycDocs)) {
+          if (!active) return;
           const path = kycDocs[key];
           if (path && typeof path === 'string') {
             const { data, error } = await supabase.storage.from('teacher-files').createSignedUrl(path, 3600);
@@ -165,6 +229,7 @@ export default function AdminTutors() {
           } else if (Array.isArray(path)) {
             const certUrls = [];
             for (const certPath of path) {
+              if (!active) return;
               const { data, error } = await supabase.storage.from('teacher-files').createSignedUrl(certPath, 3600);
               if (!error && data) {
                 certUrls.push(data.signedUrl);
@@ -173,15 +238,20 @@ export default function AdminTutors() {
             urls[key] = certUrls;
           }
         }
-        setSignedUrls(urls);
+        if (active) {
+          setSignedUrls(urls);
+        }
       } catch (err) {
-        console.error(err);
+        console.error('Error signing KYC files:', err);
       } finally {
-        setLoadingDocs(false);
+        if (active) setLoadingDocs(false);
       }
     };
 
     loadUrls();
+    return () => {
+      active = false;
+    };
   }, [selectedTutor]);
 
   // Approve Tutor
@@ -337,38 +407,6 @@ export default function AdminTutors() {
     }
   };
 
-  // Filtering list locally
-  const getFilteredTutors = () => {
-    let list = tutors;
-
-    if (filterMode === 'pending') {
-      list = list.filter(t => t.kyc_status === 'pending');
-    } else if (filterMode === 'verified') {
-      list = list.filter(t => t.verified);
-    } else if (filterMode === 'suspended') {
-      list = list.filter(t => t.suspended);
-    }
-
-    if (searchQuery.trim() !== '') {
-      const q = searchQuery.toLowerCase();
-      list = list.filter(t => 
-        (t.full_name && t.full_name.toLowerCase().includes(q)) ||
-        (t.email && t.email.toLowerCase().includes(q)) ||
-        (t.phone && t.phone.includes(q))
-      );
-    }
-
-    return list;
-  };
-
-  const filteredTutors = getFilteredTutors();
-
-  // Helper counters
-  const totalTutors = tutors.length;
-  const totalPending = tutors.filter(t => t.kyc_status === 'pending').length;
-  const totalVerified = tutors.filter(t => t.verified).length;
-  const totalSuspended = tutors.filter(t => t.suspended).length;
-
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       
@@ -379,7 +417,7 @@ export default function AdminTutors() {
             <h1>Tutors Directory</h1>
             <p>Verify qualifications, approve KYC files, suspend accounts, and view profiles.</p>
           </div>
-          <button className="admin-btn admin-btn-secondary" onClick={fetchTutors}>
+          <button className="admin-btn admin-btn-secondary" onClick={() => { fetchMetrics(); }}>
             <RefreshCw size={14} /> Refresh Directory
           </button>
         </div>
@@ -390,7 +428,7 @@ export default function AdminTutors() {
         {/* Metric cards filters */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--spacing-md)', marginBottom: 'var(--spacing-lg)' }}>
           <div 
-            onClick={() => setFilterMode('all')}
+            onClick={() => handleFilterModeChange('all')}
             style={{ 
               backgroundColor: 'var(--canvas)', 
               padding: 'var(--spacing-md)', 
@@ -401,11 +439,11 @@ export default function AdminTutors() {
             }}
           >
             <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>All Tutors</span>
-            <h2 style={{ margin: '4px 0 0 0' }}>{totalTutors}</h2>
+            <h2 style={{ margin: '4px 0 0 0' }}>{metrics.total}</h2>
           </div>
 
           <div 
-            onClick={() => setFilterMode('pending')}
+            onClick={() => handleFilterModeChange('pending')}
             style={{ 
               backgroundColor: 'var(--canvas)', 
               padding: 'var(--spacing-md)', 
@@ -416,11 +454,11 @@ export default function AdminTutors() {
             }}
           >
             <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>KYC Pending</span>
-            <h2 style={{ margin: '4px 0 0 0', color: 'var(--accent-orange)' }}>{totalPending}</h2>
+            <h2 style={{ margin: '4px 0 0 0', color: 'var(--accent-orange)' }}>{metrics.pending}</h2>
           </div>
 
           <div 
-            onClick={() => setFilterMode('verified')}
+            onClick={() => handleFilterModeChange('verified')}
             style={{ 
               backgroundColor: 'var(--canvas)', 
               padding: 'var(--spacing-md)', 
@@ -431,11 +469,11 @@ export default function AdminTutors() {
             }}
           >
             <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>Verified</span>
-            <h2 style={{ margin: '4px 0 0 0', color: 'var(--brand-green)' }}>{totalVerified}</h2>
+            <h2 style={{ margin: '4px 0 0 0', color: 'var(--brand-green)' }}>{metrics.verified}</h2>
           </div>
 
           <div 
-            onClick={() => setFilterMode('suspended')}
+            onClick={() => handleFilterModeChange('suspended')}
             style={{ 
               backgroundColor: 'var(--canvas)', 
               padding: 'var(--spacing-md)', 
@@ -446,7 +484,7 @@ export default function AdminTutors() {
             }}
           >
             <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>Suspended</span>
-            <h2 style={{ margin: '4px 0 0 0', color: '#FF5252' }}>{totalSuspended}</h2>
+            <h2 style={{ margin: '4px 0 0 0', color: '#FF5252' }}>{metrics.suspended}</h2>
           </div>
         </div>
 
@@ -459,7 +497,7 @@ export default function AdminTutors() {
             style={{ border: 'none', background: 'transparent', color: 'var(--ink)', width: '100%', height: 'auto', padding: 0 }}
             placeholder="Search tutors by name, email or number..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
           />
         </div>
 
@@ -467,7 +505,7 @@ export default function AdminTutors() {
         <div className="admin-table-container">
           {loading ? (
             <p style={{ textAlign: 'center', padding: '40px' }}>Loading tutors directory...</p>
-          ) : filteredTutors.length === 0 ? (
+          ) : tutors.length === 0 ? (
             <p style={{ textAlign: 'center', padding: '40px' }}>No tutors found matching the criteria.</p>
           ) : (
             <table className="admin-table">
@@ -482,13 +520,13 @@ export default function AdminTutors() {
                 </tr>
               </thead>
               <tbody>
-                {filteredTutors.map((tutor, idx) => (
+                {tutors.map((tutor, idx) => (
                   <tr 
                     key={tutor.id} 
-                    onClick={() => setSelectedTutor(tutor)}
+                    onClick={() => { setSelectedTutor(tutor); setSignedUrls({}); }}
                     style={{ cursor: 'pointer' }}
                   >
-                    <td>{idx + 1}</td>
+                    <td>{(page - 1) * pageSize + idx + 1}</td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         {tutor.avatar_url ? (
@@ -545,6 +583,42 @@ export default function AdminTutors() {
               </tbody>
             </table>
           )}
+
+          {/* Pagination Controls */}
+          {totalCount > 0 && (
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center', 
+              marginTop: '16px', 
+              padding: '12px 16px', 
+              backgroundColor: 'var(--canvas)', 
+              borderRadius: 'var(--rounded-lg)',
+              border: '1px solid var(--hairline)'
+            }}>
+              <span style={{ fontSize: '13px', color: 'var(--steel)' }}>
+                Showing <strong>{totalCount === 0 ? 0 : (page - 1) * pageSize + 1}</strong> to <strong>{Math.min(page * pageSize, totalCount)}</strong> of <strong>{totalCount}</strong> tutors
+              </span>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button 
+                  className="admin-btn admin-btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '13px' }}
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                >
+                  Previous
+                </button>
+                <button 
+                  className="admin-btn admin-btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '13px' }}
+                  onClick={() => setPage(p => p + 1)}
+                  disabled={page * pageSize >= totalCount}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
 
       </div>
@@ -555,7 +629,7 @@ export default function AdminTutors() {
           {/* Overlay to close drawer */}
           <div 
             style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', zIndex: 940 }}
-            onClick={() => { setSelectedTutor(null); setShowObjections(false); }}
+            onClick={() => { setSelectedTutor(null); setShowObjections(false); setSignedUrls({}); }}
           />
 
           <div className={`admin-drawer ${selectedTutor ? 'open' : ''}`}>
@@ -567,7 +641,7 @@ export default function AdminTutors() {
                 <span style={{ fontSize: '11px', color: 'var(--steel)' }}>ID: {selectedTutor.id}</span>
               </div>
               <button 
-                onClick={() => { setSelectedTutor(null); setShowObjections(false); }}
+                onClick={() => { setSelectedTutor(null); setShowObjections(false); setSignedUrls({}); }}
                 style={{ color: 'var(--steel)', background: 'none', border: 'none', cursor: 'pointer', fontSize: '18px' }}
               >
                 ✕

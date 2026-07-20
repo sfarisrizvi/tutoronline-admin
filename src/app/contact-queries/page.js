@@ -1,5 +1,5 @@
 'use client';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '../../utils/supabase/client';
 import { AdminNav } from '../../components/AdminNav';
@@ -11,26 +11,40 @@ export default function ContactQueries() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [submittingAction, setSubmittingAction] = useState(false);
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
+  const [totalCount, setTotalCount] = useState(0);
+  const [reloadTrigger, setReloadTrigger] = useState(0);
 
-  const fetchQueries = async () => {
-    setLoading(true);
-    setError(null);
-    const supabase = createClient();
-    try {
-      const { data, error: fetchErr } = await supabase
-        .from('contact_queries')
-        .select('*')
-        .order('created_at', { ascending: false });
+  // Fetch contact queries when dependencies update
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      setLoading(true);
+      setError(null);
+      const supabase = createClient();
+      try {
+        const { data, error: fetchErr, count } = await supabase
+          .from('contact_queries')
+          .select('*', { count: 'exact' })
+          .order('created_at', { ascending: false })
+          .range((page - 1) * pageSize, page * pageSize - 1);
 
-      if (fetchErr) throw fetchErr;
-      setQueries(data || []);
-    } catch (err) {
-      console.error(err);
-      setError(err.message || 'An error occurred while fetching contact queries.');
-    } finally {
-      setLoading(false);
-    }
-  };
+        if (fetchErr) throw fetchErr;
+        if (active) {
+          setQueries(data || []);
+          setTotalCount(count || 0);
+        }
+      } catch (err) {
+        console.error(err);
+        if (active) setError(err.message || 'An error occurred while fetching contact queries.');
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    load();
+    return () => { active = false; };
+  }, [page, pageSize, reloadTrigger]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -39,9 +53,7 @@ export default function ContactQueries() {
 
       if (!user || user.user_metadata?.role !== 'admin') {
         router.push('/login');
-        return;
       }
-      fetchQueries();
     };
     checkAuth();
   }, [router]);
@@ -83,7 +95,7 @@ export default function ContactQueries() {
             <h1>Contact Form Queries</h1>
             <p>Review billing, trial class requests, or customer feedback. Click Email or WhatsApp to respond directly.</p>
           </div>
-          <button className="admin-btn admin-btn-secondary" onClick={fetchQueries}>
+          <button className="admin-btn admin-btn-secondary" onClick={() => setReloadTrigger(t => t + 1)}>
             <RefreshCw size={14} /> Refresh Queries
           </button>
         </div>
@@ -127,7 +139,7 @@ export default function ContactQueries() {
                   
                   return (
                     <tr key={q.id}>
-                      <td>{idx + 1}</td>
+                      <td>{(page - 1) * pageSize + idx + 1}</td>
                       <td>
                         <div style={{ fontWeight: 600 }}>{q.name}</div>
                         <div style={{ fontSize: '11px', color: 'var(--steel)' }}>{q.email}</div>
@@ -139,7 +151,10 @@ export default function ContactQueries() {
                         </span>
                       </td>
                       <td>
-                        <div style={{ fontSize: '13px', whiteSpace: 'pre-wrap', lineHeight: '1.4', maxHeight: '100px', overflowY: 'auto' }}>
+                        <div style={{ fontWeight: 600, color: 'var(--brand-green)', fontSize: '13px', marginBottom: '4px' }}>
+                          {q.subject || 'No Subject'}
+                        </div>
+                        <div style={{ fontSize: '12px', lineHeight: '1.4', opacity: 0.9 }}>
                           {q.message}
                         </div>
                       </td>
@@ -150,41 +165,57 @@ export default function ContactQueries() {
                         </div>
                       </td>
                       <td>
-                        <select 
-                          className={`admin-badge ${getStatusBadge(q.status)}`}
-                          style={{ 
-                            height: '28px',
-                            cursor: 'pointer',
-                            outline: 'none',
-                            textTransform: 'capitalize',
-                            fontFamily: 'inherit',
-                            textAlign: 'center',
-                            textAlignLast: 'center',
-                            width: '120px',
-                            padding: '4px 10px',
-                            paddingRight: '24px',
-                            borderRadius: 'var(--rounded-full)',
-                            fontSize: '11px',
-                            fontWeight: '600',
-                            appearance: 'none',
-                            backgroundImage: `url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%23${
-                              q.status === 'resolved' ? '00FF87' : q.status === 'replied' ? '40C4FF' : 'FFB300'
-                            }' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='m6 8 4 4 4-4'/%3E%3C/svg%3E")`,
-                            backgroundPosition: 'right 8px center',
-                            backgroundRepeat: 'no-repeat',
-                            backgroundSize: '16px'
-                          }}
-                          value={q.status}
-                          onChange={(e) => handleUpdateStatus(q.id, e.target.value)}
-                          disabled={submittingAction}
-                        >
-                          <option value="pending" style={{ backgroundColor: '#2F1B10', color: '#FFB300' }}>Pending</option>
-                          <option value="replied" style={{ backgroundColor: '#0C1E2F', color: '#40C4FF' }}>Replied</option>
-                          <option value="resolved" style={{ backgroundColor: '#14352D', color: '#00FF87' }}>Resolved</option>
-                        </select>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                          <span className={`admin-badge ${getStatusBadge(q.status)}`} style={{ alignSelf: 'flex-start', textTransform: 'uppercase', fontSize: '10px' }}>
+                            {q.status || 'pending'}
+                          </span>
+                          
+                          {/* Quick Actions */}
+                          {q.status !== 'resolved' && (
+                            <button 
+                              disabled={submittingAction}
+                              onClick={() => handleUpdateStatus(q.id, 'resolved')}
+                              className="admin-btn"
+                              style={{ 
+                                padding: '4px 8px', 
+                                fontSize: '10px', 
+                                backgroundColor: 'rgba(74, 222, 128, 0.15)', 
+                                color: '#4ade80', 
+                                border: '1px solid rgba(74, 222, 128, 0.3)',
+                                borderRadius: '4px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}
+                            >
+                              <CheckCircle size={10} /> Mark Resolved
+                            </button>
+                          )}
+                          
+                          {q.status === 'pending' && (
+                            <button 
+                              disabled={submittingAction}
+                              onClick={() => handleUpdateStatus(q.id, 'replied')}
+                              className="admin-btn"
+                              style={{ 
+                                padding: '4px 8px', 
+                                fontSize: '10px', 
+                                backgroundColor: 'rgba(56, 189, 248, 0.15)', 
+                                color: '#38bdf8', 
+                                border: '1px solid rgba(56, 189, 248, 0.3)',
+                                borderRadius: '4px',
+                                display: 'inline-flex',
+                                alignItems: 'center',
+                                gap: '4px'
+                              }}
+                            >
+                              <Clock size={10} /> Mark Replied
+                            </button>
+                          )}
+                        </div>
                       </td>
                       <td>
-                        <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                        <div style={{ display: 'flex', gap: '8px' }}>
                           <a 
                             href={`mailto:${q.email}?subject=Tutor%20Online%20Support%20Query`}
                             className="admin-btn" 
@@ -244,6 +275,42 @@ export default function ContactQueries() {
                 })}
               </tbody>
             </table>
+          )}
+          
+          {/* Pagination Controls */}
+          {totalCount > 0 && (
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center', 
+              marginTop: '16px', 
+              padding: '12px 16px', 
+              backgroundColor: 'var(--canvas)', 
+              borderRadius: 'var(--rounded-lg)',
+              border: '1px solid var(--hairline)'
+            }}>
+              <span style={{ fontSize: '13px', color: 'var(--steel)' }}>
+                Showing <strong>{totalCount === 0 ? 0 : (page - 1) * pageSize + 1}</strong> to <strong>{Math.min(page * pageSize, totalCount)}</strong> of <strong>{totalCount}</strong> queries
+              </span>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button 
+                  className="admin-btn admin-btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '13px' }}
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                >
+                  Previous
+                </button>
+                <button 
+                  className="admin-btn admin-btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '13px' }}
+                  onClick={() => setPage(p => p + 1)}
+                  disabled={page * pageSize >= totalCount}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
           )}
         </div>
 

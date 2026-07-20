@@ -28,9 +28,13 @@ export default function ClientsDirectory() {
   const [adminUser, setAdminUser] = useState(null);
   const [adminRole, setAdminRole] = useState('super_admin');
 
-  // Filters & Search
+  // Filters, Search, Pagination
   const [filterMode, setFilterMode] = useState('all'); // 'all' | 'active' | 'suspended'
   const [searchQuery, setSearchQuery] = useState('');
+  const [page, setPage] = useState(1);
+  const [pageSize] = useState(15);
+  const [totalCount, setTotalCount] = useState(0);
+  const [metrics, setMetrics] = useState({ total: 0, active: 0, suspended: 0 });
 
   // Selected Client details drawer
   const [selectedClient, setSelectedClient] = useState(null);
@@ -41,23 +45,73 @@ export default function ClientsDirectory() {
   const [loadingChildren, setLoadingChildren] = useState(false);
   const [openChildIndices, setOpenChildIndices] = useState({});
 
-  const fetchClients = async () => {
-    setLoading(true);
+  const fetchMetrics = async () => {
     const supabase = createClient();
     try {
-      const { data, error } = await supabase
-        .from('client_profiles')
-        .select('*')
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
-      setClients(data || []);
+      const [
+        { count: total },
+        { count: active },
+        { count: suspended }
+      ] = await Promise.all([
+        supabase.from('client_profiles').select('*', { count: 'exact', head: true }),
+        supabase.from('client_profiles').select('*', { count: 'exact', head: true }).eq('suspended', false),
+        supabase.from('client_profiles').select('*', { count: 'exact', head: true }).eq('suspended', true)
+      ]);
+      setMetrics({ total: total || 0, active: active || 0, suspended: suspended || 0 });
     } catch (err) {
-      console.error(err);
-    } finally {
-      setLoading(false);
+      console.error('Error fetching client metrics:', err);
     }
   };
+
+  const handleFilterModeChange = (mode) => {
+    setFilterMode(mode);
+    setPage(1);
+  };
+
+  const handleSearchChange = (val) => {
+    setSearchQuery(val);
+    setPage(1);
+  };
+
+  // Fetch clients when dependencies update
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      setLoading(true);
+      const supabase = createClient();
+      try {
+        let query = supabase
+          .from('client_profiles')
+          .select('*', { count: 'exact' });
+
+        if (filterMode === 'active') {
+          query = query.eq('suspended', false);
+        } else if (filterMode === 'suspended') {
+          query = query.eq('suspended', true);
+        }
+
+        if (searchQuery.trim() !== '') {
+          query = query.or(`full_name.ilike.%${searchQuery}%,email.ilike.%${searchQuery}%,phone.ilike.%${searchQuery}%`);
+        }
+
+        const { data, error, count } = await query
+          .order('created_at', { ascending: false })
+          .range((page - 1) * pageSize, page * pageSize - 1);
+
+        if (error) throw error;
+        if (active) {
+          setClients(data || []);
+          setTotalCount(count || 0);
+        }
+      } catch (err) {
+        console.error(err);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+    load();
+    return () => { active = false; };
+  }, [page, filterMode, searchQuery, pageSize]);
 
   useEffect(() => {
     const checkAuth = async () => {
@@ -70,7 +124,7 @@ export default function ClientsDirectory() {
       }
       setAdminUser(user);
       setAdminRole(user.user_metadata?.admin_role || 'super_admin');
-      fetchClients();
+      fetchMetrics();
     };
     checkAuth();
   }, [router]);
@@ -78,11 +132,10 @@ export default function ClientsDirectory() {
   // Load children list if selected client is parent
   useEffect(() => {
     if (!selectedClient || selectedClient.client_type !== 'parent') {
-      setChildrenList([]);
-      setOpenChildIndices({});
       return;
     }
 
+    let active = true;
     const fetchChildren = async () => {
       setLoadingChildren(true);
       const supabase = createClient();
@@ -93,20 +146,23 @@ export default function ClientsDirectory() {
           .eq('client_id', selectedClient.id);
         
         if (error) throw error;
-        setChildrenList(data || []);
-        
-        // Open the first child accordian by default
-        if (data && data.length > 0) {
-          setOpenChildIndices({ 0: true });
+        if (active) {
+          setChildrenList(data || []);
+          if (data && data.length > 0) {
+            setOpenChildIndices({ 0: true });
+          } else {
+            setOpenChildIndices({});
+          }
         }
       } catch (err) {
         console.error('Error fetching children list:', err);
       } finally {
-        setLoadingChildren(false);
+        if (active) setLoadingChildren(false);
       }
     };
 
     fetchChildren();
+    return () => { active = false; };
   }, [selectedClient]);
 
   const toggleChildAccordian = (idx) => {
@@ -134,6 +190,7 @@ export default function ClientsDirectory() {
       // Update state locally
       setClients(prev => prev.map(c => c.id === selectedClient.id ? { ...c, suspended: nextSuspendedState } : c));
       setSelectedClient(prev => ({ ...prev, suspended: nextSuspendedState }));
+      fetchMetrics();
       alert(`Client account ${nextSuspendedState ? 'suspended' : 'unsuspended'} successfully.`);
     } catch (err) {
       alert(`Error updating suspension: ${err.message}`);
@@ -195,33 +252,6 @@ export default function ClientsDirectory() {
     }
   };
 
-  const getFilteredClients = () => {
-    let list = clients;
-
-    if (filterMode === 'active') {
-      list = list.filter(c => !c.suspended);
-    } else if (filterMode === 'suspended') {
-      list = list.filter(c => c.suspended);
-    }
-
-    if (searchQuery.trim() !== '') {
-      const q = searchQuery.toLowerCase();
-      list = list.filter(c => 
-        (c.full_name && c.full_name.toLowerCase().includes(q)) ||
-        (c.email && c.email.toLowerCase().includes(q)) ||
-        (c.phone && c.phone.includes(q))
-      );
-    }
-
-    return list;
-  };
-
-  const filteredClients = getFilteredClients();
-
-  const totalClients = clients.length;
-  const totalActive = clients.filter(c => !c.suspended).length;
-  const totalSuspended = clients.filter(c => c.suspended).length;
-
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       
@@ -232,7 +262,7 @@ export default function ClientsDirectory() {
             <h1>Clients Directory</h1>
             <p>Manage parent and student profiles, restrict account access, and review routing metadata.</p>
           </div>
-          <button className="admin-btn admin-btn-secondary" onClick={fetchClients}>
+          <button className="admin-btn admin-btn-secondary" onClick={() => { fetchMetrics(); }}>
             <RefreshCw size={14} /> Refresh Directory
           </button>
         </div>
@@ -243,7 +273,7 @@ export default function ClientsDirectory() {
         {/* Top metrics filter cards */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 'var(--spacing-md)', marginBottom: 'var(--spacing-lg)' }}>
           <div 
-            onClick={() => setFilterMode('all')}
+            onClick={() => handleFilterModeChange('all')}
             style={{ 
               backgroundColor: 'var(--canvas)', 
               padding: 'var(--spacing-md)', 
@@ -254,11 +284,11 @@ export default function ClientsDirectory() {
             }}
           >
             <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>All Clients</span>
-            <h2 style={{ margin: '4px 0 0 0', color: 'var(--brand-green)' }}>{totalClients}</h2>
+            <h2 style={{ margin: '4px 0 0 0', color: 'var(--brand-green)' }}>{metrics.total}</h2>
           </div>
 
           <div 
-            onClick={() => setFilterMode('active')}
+            onClick={() => handleFilterModeChange('active')}
             style={{ 
               backgroundColor: 'var(--canvas)', 
               padding: 'var(--spacing-md)', 
@@ -269,11 +299,11 @@ export default function ClientsDirectory() {
             }}
           >
             <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>Active</span>
-            <h2 style={{ margin: '4px 0 0 0', color: 'var(--accent-blue)' }}>{totalActive}</h2>
+            <h2 style={{ margin: '4px 0 0 0', color: 'var(--accent-blue)' }}>{metrics.active}</h2>
           </div>
 
           <div 
-            onClick={() => setFilterMode('suspended')}
+            onClick={() => handleFilterModeChange('suspended')}
             style={{ 
               backgroundColor: 'var(--canvas)', 
               padding: 'var(--spacing-md)', 
@@ -284,7 +314,7 @@ export default function ClientsDirectory() {
             }}
           >
             <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>Suspended</span>
-            <h2 style={{ margin: '4px 0 0 0', color: '#FF5252' }}>{totalSuspended}</h2>
+            <h2 style={{ margin: '4px 0 0 0', color: '#FF5252' }}>{metrics.suspended}</h2>
           </div>
         </div>
 
@@ -297,7 +327,7 @@ export default function ClientsDirectory() {
             style={{ border: 'none', background: 'transparent', color: 'var(--ink)', width: '100%', height: 'auto', padding: 0 }}
             placeholder="Search clients by name, email or number..."
             value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
+            onChange={(e) => handleSearchChange(e.target.value)}
           />
         </div>
 
@@ -305,7 +335,7 @@ export default function ClientsDirectory() {
         <div className="admin-table-container">
           {loading ? (
             <p style={{ textAlign: 'center', padding: '40px' }}>Loading clients directory...</p>
-          ) : filteredClients.length === 0 ? (
+          ) : clients.length === 0 ? (
             <p style={{ textAlign: 'center', padding: '40px' }}>No clients found matching the query.</p>
           ) : (
             <table className="admin-table">
@@ -319,13 +349,13 @@ export default function ClientsDirectory() {
                 </tr>
               </thead>
               <tbody>
-                {filteredClients.map((client, idx) => (
+                {clients.map((client, idx) => (
                   <tr 
                     key={client.id}
-                    onClick={() => setSelectedClient(client)}
+                    onClick={() => { setSelectedClient(client); setChildrenList([]); setOpenChildIndices({}); }}
                     style={{ cursor: 'pointer' }}
                   >
-                    <td>{idx + 1}</td>
+                    <td>{(page - 1) * pageSize + idx + 1}</td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         {client.avatar_url ? (
@@ -372,9 +402,45 @@ export default function ClientsDirectory() {
               </tbody>
             </table>
           )}
+          
+          {/* Pagination Controls */}
+          {totalCount > 0 && (
+            <div style={{ 
+              display: 'flex', 
+              justifyContent: 'space-between', 
+              alignItems: 'center', 
+              marginTop: '16px', 
+              padding: '12px 16px', 
+              backgroundColor: 'var(--canvas)', 
+              borderRadius: 'var(--rounded-lg)',
+              border: '1px solid var(--hairline)'
+            }}>
+              <span style={{ fontSize: '13px', color: 'var(--steel)' }}>
+                Showing <strong>{totalCount === 0 ? 0 : (page - 1) * pageSize + 1}</strong> to <strong>{Math.min(page * pageSize, totalCount)}</strong> of <strong>{totalCount}</strong> clients
+              </span>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button 
+                  className="admin-btn admin-btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '13px' }}
+                  onClick={() => setPage(p => Math.max(1, p - 1))}
+                  disabled={page === 1}
+                >
+                  Previous
+                </button>
+                <button 
+                  className="admin-btn admin-btn-secondary"
+                  style={{ padding: '6px 12px', fontSize: '13px' }}
+                  onClick={() => setPage(p => p + 1)}
+                  disabled={page * pageSize >= totalCount}
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
         </div>
-
       </div>
+
 
       {/* Right Drawer: Client Details */}
       {selectedClient && (
