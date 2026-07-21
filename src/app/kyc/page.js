@@ -959,7 +959,27 @@ export default function KYCReview() {
                     </div>
                   )}
                   <div>
-                    <h4 style={{ margin: '0 0 4px 0', fontSize: '16px' }}>{selectedTutor.full_name}</h4>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+                      <h4 style={{ margin: 0, fontSize: '16px' }}>{selectedTutor.full_name}</h4>
+                      <a 
+                        href={`https://tutoronline.pk/tutors/${selectedTutor.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{ 
+                          color: 'var(--brand-green)', 
+                          display: 'inline-flex', 
+                          alignItems: 'center', 
+                          textDecoration: 'none',
+                          opacity: 0.8,
+                          transition: 'opacity 0.2s ease'
+                        }}
+                        onMouseEnter={(e) => e.currentTarget.style.opacity = '1'}
+                        onMouseLeave={(e) => e.currentTarget.style.opacity = '0.8'}
+                        title="View Public Profile"
+                      >
+                        <ExternalLink size={14} />
+                      </a>
+                    </div>
                     <span style={{ fontSize: '12px', color: 'var(--steel)', display: 'block' }}>{selectedTutor.email}</span>
                     <span style={{ fontSize: '12px', color: 'var(--steel)', display: 'block' }}>{selectedTutor.phone || 'No phone'}</span>
                   </div>
