@@ -54,6 +54,40 @@ export default function AdminTutors() {
   const [objectionComment, setObjectionComment] = useState('');
   const [submittingAction, setSubmittingAction] = useState(false);
 
+  // Custom Toast State
+  const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+  const showToast = (message, type = 'success') => {
+    setToast({ show: true, message, type });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 4000);
+  };
+
+  // Custom Consent Modal State
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: null,
+    confirmText: 'Confirm',
+    cancelText: 'Cancel',
+    danger: false
+  });
+  const requestConsent = (title, message, onConfirm, danger = false) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      onConfirm: () => {
+        onConfirm();
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+      },
+      confirmText: 'Confirm',
+      cancelText: 'Cancel',
+      danger
+    });
+  };
+
   // Lightbox Interactive states
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
@@ -330,85 +364,116 @@ export default function AdminTutors() {
     if (!selectedTutor || adminRole === 'monitor') return;
     const nextSuspendedState = !selectedTutor.suspended;
     
-    setSubmittingAction(true);
-    const supabase = createClient();
-    try {
-      const { error } = await supabase
-        .from('tutor_profiles')
-        .update({ suspended: nextSuspendedState })
-        .eq('id', selectedTutor.id);
+    requestConsent(
+      nextSuspendedState ? 'Suspend Tutor Account' : 'Unsuspend Tutor Account',
+      nextSuspendedState 
+        ? 'Are you sure you want to suspend this tutor account? They will lose access to their tutor dashboard, onboarding, and will be hidden from all public searches.'
+        : 'Are you sure you want to unsuspend this tutor account? This will restore their active portal and onboarding access.',
+      async () => {
+        setSubmittingAction(true);
+        const supabase = createClient();
+        try {
+          const { error } = await supabase
+            .from('tutor_profiles')
+            .update({ suspended: nextSuspendedState })
+            .eq('id', selectedTutor.id);
 
-      if (error) throw error;
+          if (error) throw error;
 
-      // Update state
-      setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, suspended: nextSuspendedState } : t));
-      setSelectedTutor(prev => ({ ...prev, suspended: nextSuspendedState }));
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setSubmittingAction(false);
-    }
+          // Update state
+          setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, suspended: nextSuspendedState } : t));
+          setSelectedTutor(prev => ({ ...prev, suspended: nextSuspendedState }));
+          showToast(`Account successfully ${nextSuspendedState ? 'suspended' : 'unsuspended'}.`);
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setSubmittingAction(false);
+        }
+      },
+      nextSuspendedState // danger flag is true when suspending
+    );
   };
 
   // Toggle Verification Badge
   const toggleVerification = async () => {
     if (!selectedTutor || adminRole === 'monitor') return;
     if (selectedTutor.kyc_status !== 'approved') {
-      alert("Tutor is not eligible for verified badge until their KYC status is approved.");
+      showToast("Tutor is not eligible for verified badge until their KYC status is approved.", "error");
       return;
     }
     const nextVerifiedState = !selectedTutor.verified;
+    const updatedVerifications = {
+      ...(selectedTutor.kyc_verifications || {}),
+      profile_verified_at: nextVerifiedState ? new Date().toISOString() : null
+    };
     
-    setSubmittingAction(true);
-    const supabase = createClient();
-    try {
-      const { error } = await supabase
-        .from('tutor_profiles')
-        .update({ verified: nextVerifiedState })
-        .eq('id', selectedTutor.id);
+    requestConsent(
+      nextVerifiedState ? 'Grant Verified Premium Badge' : 'Remove Verified Premium Badge',
+      nextVerifiedState
+        ? 'Are you sure you want to grant the Verified Badge (Premium Status) to this tutor?'
+        : 'Are you sure you want to remove the Verified Badge (Premium Status) from this tutor?',
+      async () => {
+        setSubmittingAction(true);
+        const supabase = createClient();
+        try {
+          const { error } = await supabase
+            .from('tutor_profiles')
+            .update({ 
+              verified: nextVerifiedState,
+              kyc_verifications: updatedVerifications
+            })
+            .eq('id', selectedTutor.id);
 
-      if (error) throw error;
+          if (error) throw error;
 
-      // Update state
-      setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, verified: nextVerifiedState } : t));
-      setSelectedTutor(prev => ({ ...prev, verified: nextVerifiedState }));
-      alert(`Verified badge ${nextVerifiedState ? 'granted' : 'removed'} successfully.`);
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setSubmittingAction(false);
-    }
+          // Update state
+          setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, verified: nextVerifiedState, kyc_verifications: updatedVerifications } : t));
+          setSelectedTutor(prev => ({ ...prev, verified: nextVerifiedState, kyc_verifications: updatedVerifications }));
+          showToast(`Verified badge ${nextVerifiedState ? 'granted' : 'removed'} successfully.`);
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setSubmittingAction(false);
+        }
+      }
+    );
   };
 
   // Delete User Account (Super Admin only)
   const handleDeleteAccount = async () => {
     if (!selectedTutor || adminRole !== 'super_admin') return;
-    if (!confirm('CRITICAL ACTION: Are you sure you want to permanently delete this tutor account? This cannot be undone.')) return;
+    
+    requestConsent(
+      'PERMANENT DELETION',
+      'CRITICAL ACTION: Are you sure you want to permanently delete this tutor account? All documents, profiles, and dashboard data will be deleted forever. This cannot be undone.',
+      async () => {
+        setSubmittingAction(true);
+        try {
+          // Call server API route /api/admins to delete auth.user securely
+          const res = await fetch(`/api/admins?id=${selectedTutor.id}`, {
+            method: 'DELETE'
+          });
+          const data = await res.json();
 
-    setSubmittingAction(true);
-    try {
-      // Call server API route /api/admins to delete auth.user securely
-      const res = await fetch(`/api/admins?id=${selectedTutor.id}`, {
-        method: 'DELETE'
-      });
-      const data = await res.json();
+          if (!res.ok) {
+            throw new Error(data.error || 'Failed to delete user');
+          }
 
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to delete user');
-      }
+          // Also trigger a notification (Mock email notification to user)
+          console.log(`Account deletion notification dispatched to ${selectedTutor.email}`);
 
-      // Also trigger a notification (Mock email notification to user)
-      console.log(`Account deletion notification dispatched to ${selectedTutor.email}`);
-
-      // Update state
-      setTutors(prev => prev.filter(t => t.id !== selectedTutor.id));
-      setSelectedTutor(null);
-      alert('Account permanently deleted.');
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setSubmittingAction(false);
-    }
+          // Update state
+          setTutors(prev => prev.filter(t => t.id !== selectedTutor.id));
+          setSelectedTutor(null);
+          showToast('Account permanently deleted.');
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setSubmittingAction(false);
+        }
+      },
+      true // danger flag
+    );
   };
 
   return (
@@ -603,7 +668,7 @@ export default function AdminTutors() {
               <span style={{ fontSize: '13px', color: 'var(--steel)' }}>
                 Showing <strong>{totalCount === 0 ? 0 : (page - 1) * pageSize + 1}</strong> to <strong>{Math.min(page * pageSize, totalCount)}</strong> of <strong>{totalCount}</strong> tutors
               </span>
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button 
                   className="admin-btn admin-btn-secondary"
                   style={{ padding: '6px 12px', fontSize: '13px' }}
@@ -612,6 +677,57 @@ export default function AdminTutors() {
                 >
                   Previous
                 </button>
+                {(() => {
+                  const totalPages = Math.ceil(totalCount / pageSize);
+                  const pages = [];
+                  const maxVisible = 5;
+                  let start = Math.max(1, page - Math.floor(maxVisible / 2));
+                  let end = Math.min(totalPages, start + maxVisible - 1);
+                  if (end - start + 1 < maxVisible) {
+                    start = Math.max(1, end - maxVisible + 1);
+                  }
+                  for (let i = start; i <= end; i++) {
+                    pages.push(i);
+                  }
+                  return (
+                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                      {start > 1 && (
+                        <>
+                          <button
+                            className={`admin-btn ${page === 1 ? 'admin-btn-primary' : 'admin-btn-secondary'}`}
+                            style={{ padding: '6px 12px', fontSize: '13px', minWidth: '32px' }}
+                            onClick={() => setPage(1)}
+                          >
+                            1
+                          </button>
+                          {start > 2 && <span style={{ padding: '0 4px', color: 'var(--steel)', fontSize: '13px' }}>...</span>}
+                        </>
+                      )}
+                      {pages.map(p => (
+                        <button
+                          key={p}
+                          className={`admin-btn ${page === p ? 'admin-btn-primary' : 'admin-btn-secondary'}`}
+                          style={{ padding: '6px 12px', fontSize: '13px', minWidth: '32px' }}
+                          onClick={() => setPage(p)}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                      {end < totalPages && (
+                        <>
+                          {end < totalPages - 1 && <span style={{ padding: '0 4px', color: 'var(--steel)', fontSize: '13px' }}>...</span>}
+                          <button
+                            className={`admin-btn ${page === totalPages ? 'admin-btn-primary' : 'admin-btn-secondary'}`}
+                            style={{ padding: '6px 12px', fontSize: '13px', minWidth: '32px' }}
+                            onClick={() => setPage(totalPages)}
+                          >
+                            {totalPages}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
                 <button 
                   className="admin-btn admin-btn-secondary"
                   style={{ padding: '6px 12px', fontSize: '13px' }}
@@ -655,8 +771,66 @@ export default function AdminTutors() {
             {/* Drawer Body Scroll */}
             <div style={{ flex: 1, padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
               
-              {/* Profile card summary */}
-              <div style={{ display: 'flex', gap: '16px', alignItems: 'center', justifyContent: 'space-between', padding: '16px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-lg)', backgroundColor: 'var(--surface-soft)' }}>
+              {/* KYC Status & Verification Badge Toggle Above Card */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <span className={`admin-badge ${
+                    selectedTutor.suspended 
+                      ? 'admin-badge-red' 
+                      : (!selectedTutor.onboarding_complete || !selectedTutor.kyc_docs || Object.keys(selectedTutor.kyc_docs).length === 0)
+                        ? 'admin-badge-grey'
+                        : selectedTutor.kyc_status === 'approved' 
+                          ? 'admin-badge-green' 
+                          : selectedTutor.kyc_status === 'rejected' 
+                            ? 'admin-badge-purple' 
+                            : 'admin-badge-orange'
+                  }`}>
+                    {selectedTutor.suspended 
+                      ? 'Suspended' 
+                      : (!selectedTutor.onboarding_complete || !selectedTutor.kyc_docs || Object.keys(selectedTutor.kyc_docs).length === 0)
+                        ? 'Onboarding Incomplete'
+                        : `KYC status: ${selectedTutor.kyc_status}`}
+                  </span>
+                                   {/* Verified Badge Pill (Informational Only, Hidden when unverified) */}
+                  {selectedTutor.verified && (
+                    <span
+                      style={{
+                        background: 'var(--brand-green-soft)',
+                        border: '1px solid var(--brand-green)',
+                        padding: '4px 10px',
+                        borderRadius: '999px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        cursor: 'help'
+                      }}
+                      title={`Verified on ${(() => {
+                        const verifiedAt = selectedTutor.kyc_verifications?.profile_verified_at || selectedTutor.kyc_verifications?.approved_at || selectedTutor.created_at;
+                        if (!verifiedAt) return 'JUL 2026';
+                        const d = new Date(verifiedAt);
+                        const month = d.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+                        const year = d.getFullYear();
+                        return `${month} ${year}`;
+                      })()}`}
+                    >
+                      <img 
+                        src="/shield.svg" 
+                        alt="Verified" 
+                        style={{ 
+                          width: '14px', 
+                          height: '14px' 
+                        }} 
+                      />
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--brand-green-dark)' }}>
+                        VERIFIED
+                      </span>
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Tutor Profile Summary Card (Name Card) */}
+              <div style={{ display: 'flex', gap: '16px', alignItems: 'center', padding: '16px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-lg)', backgroundColor: 'var(--surface-soft)', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flex: 1 }}>
                   {selectedTutor.avatar_url ? (
                     <img 
@@ -676,7 +850,7 @@ export default function AdminTutors() {
                   </div>
                 </div>
 
-                {/* Verification Shield Icon */}
+                {/* Shield Toggle Icon on the right side of the card */}
                 <button
                   onClick={toggleVerification}
                   style={{
@@ -687,32 +861,24 @@ export default function AdminTutors() {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    opacity: selectedTutor.kyc_status === 'approved' ? 1 : 0.4
+                    opacity: selectedTutor.kyc_status === 'approved' ? 1 : 0.4,
+                    transition: 'transform 0.2s ease',
                   }}
                   title={selectedTutor.kyc_status === 'approved' ? (selectedTutor.verified ? "Remove Verified Badge" : "Give Verified Badge") : "Approve KYC first then verify the profile."}
                   disabled={submittingAction}
+                  onMouseEnter={(e) => { if (selectedTutor.kyc_status === 'approved') e.currentTarget.style.transform = 'scale(1.1)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
                 >
                   <img 
                     src="/shield.svg" 
-                    alt="Verified" 
+                    alt="Verified Toggle" 
                     style={{ 
                       width: '32px', 
                       height: '32px', 
-                      filter: selectedTutor.verified ? 'none' : 'grayscale(100%) contrast(50%)' 
+                      filter: selectedTutor.verified ? 'none' : 'grayscale(100%) opacity(30%)' 
                     }} 
                   />
                 </button>
-              </div>
-
-              {/* Status Banner */}
-              <div>
-                <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', textTransform: 'uppercase', display: 'block', marginBottom: '6px' }}>Verification Status</span>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <span className={`admin-badge ${selectedTutor.suspended ? 'admin-badge-red' : selectedTutor.kyc_status === 'approved' ? 'admin-badge-green' : 'admin-badge-orange'}`}>
-                    {selectedTutor.suspended ? 'Suspended' : `KYC status: ${selectedTutor.kyc_status}`}
-                  </span>
-                  {selectedTutor.verified && <img src="/shield.svg" alt="Verified" style={{ width: '15px', height: '15px', verticalAlign: 'middle' }} />}
-                </div>
               </div>
 
               {/* Bio & Details */}
@@ -906,41 +1072,39 @@ export default function AdminTutors() {
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', gap: '12px' }}>
-                    {/* Toggle Verified Badge Button */}
-                    <button 
-                      onClick={toggleVerification} 
-                      className={`admin-btn ${selectedTutor.verified ? 'admin-btn-secondary' : 'admin-btn-primary'}`} 
-                      style={{ flex: 1 }}
-                      disabled={submittingAction}
-                    >
-                      {selectedTutor.verified ? 'Remove Verified' : 'Give Verified Badge'}
-                    </button>
-
-                    {/* Suspend Button */}
-                    <button 
-                      onClick={toggleSuspension} 
-                      className={`admin-btn ${selectedTutor.suspended ? 'admin-btn-primary' : 'admin-btn-secondary'}`} 
-                      style={{ flex: 1 }}
-                      disabled={submittingAction}
-                    >
-                      {selectedTutor.suspended ? <><UserCheck size={14} /> Unsuspend</> : <><UserX size={14} /> Suspend</>}
-                    </button>
-                  </div>
-
-                  {adminRole === 'super_admin' && (
-                    <div style={{ display: 'flex', gap: '12px' }}>
-                      {/* Delete Account (Super Admin only) */}
+                  <div style={{ display: 'flex', gap: '12px', width: '100%' }}>
+                    {selectedTutor.suspended ? (
+                      <>
+                        <button 
+                          onClick={toggleSuspension} 
+                          className="admin-btn" 
+                          style={{ flex: 1, backgroundColor: 'var(--brand-green)', color: '#fff', border: 'none' }}
+                          disabled={submittingAction}
+                        >
+                          <UserCheck size={14} /> Unsuspend
+                        </button>
+                        {adminRole === 'super_admin' && (
+                          <button 
+                            onClick={handleDeleteAccount} 
+                            className="admin-btn admin-btn-danger" 
+                            style={{ flex: 1 }}
+                            disabled={submittingAction}
+                          >
+                            <Trash2 size={14} /> Delete Account
+                          </button>
+                        )}
+                      </>
+                    ) : (
                       <button 
-                        onClick={handleDeleteAccount} 
-                        className="admin-btn admin-btn-danger" 
+                        onClick={toggleSuspension} 
+                        className="admin-btn admin-btn-secondary" 
                         style={{ flex: 1 }}
                         disabled={submittingAction}
                       >
-                        <Trash2 size={14} /> Delete Account
+                        <UserX size={14} /> Suspend Account
                       </button>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </>
               )}
 
@@ -1255,6 +1419,74 @@ export default function AdminTutors() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Toast container */}
+      {toast.show && (
+        <div style={{
+          position: 'fixed',
+          top: '24px',
+          right: '24px',
+          backgroundColor: toast.type === 'error' ? '#EF4444' : 'var(--brand-green-dark)',
+          color: '#fff',
+          padding: '12px 24px',
+          borderRadius: 'var(--rounded-md)',
+          boxShadow: 'var(--shadow-lg)',
+          zIndex: 9999,
+          fontWeight: 600,
+          fontSize: '14px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          border: toast.type === 'error' ? '1px solid #F87171' : '1px solid var(--brand-green)'
+        }}>
+          {toast.type === 'error' ? <X size={16} /> : <Check size={16} />}
+          {toast.message}
+        </div>
+      )}
+
+      {/* Consent Modal overlay & dialog */}
+      {confirmModal.isOpen && (
+        <>
+          <div 
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 9998 }}
+            onClick={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+          />
+          <div style={{
+            position: 'fixed',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            backgroundColor: 'var(--canvas)',
+            borderRadius: 'var(--rounded-lg)',
+            border: '1px solid var(--hairline)',
+            boxShadow: 'var(--shadow-xl)',
+            padding: '24px',
+            width: '400px',
+            maxWidth: '90%',
+            zIndex: 9999,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px'
+          }}>
+            <h4 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: 'var(--ink)' }}>{confirmModal.title}</h4>
+            <p style={{ margin: 0, fontSize: '14px', color: 'var(--slate)', lineHeight: 1.5 }}>{confirmModal.message}</p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '8px' }}>
+              <button 
+                className="admin-btn admin-btn-secondary" 
+                onClick={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+              >
+                {confirmModal.cancelText}
+              </button>
+              <button 
+                className={`admin-btn ${confirmModal.danger ? 'admin-btn-danger' : 'admin-btn-primary'}`}
+                onClick={confirmModal.onConfirm}
+              >
+                {confirmModal.confirmText}
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
     </div>

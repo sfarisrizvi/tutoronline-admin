@@ -18,7 +18,8 @@ import {
   RotateCw,
   ZoomIn,
   ZoomOut,
-  Maximize2
+  Maximize2,
+  Trash2
 } from 'lucide-react';
 
 export default function KYCReview() {
@@ -36,6 +37,8 @@ export default function KYCReview() {
   const [totalCount, setTotalCount] = useState(0);
   const [counts, setCounts] = useState({ pending_onboarding: 0, pending: 0, rejected: 0, approved: 0 });
   const [reloadTrigger, setReloadTrigger] = useState(0);
+  const [sortField, setSortField] = useState('created_at'); // 'created_at' | 'hourly_rate' | 'kyc_docs'
+  const [sortAsc, setSortAsc] = useState(false); // Default false: latest signup users first (DESC)
 
   // Selected Tutor Drawer state
   const [selectedTutor, setSelectedTutor] = useState(null);
@@ -51,6 +54,40 @@ export default function KYCReview() {
   const [objectionComment, setObjectionComment] = useState('');
   const [submittingAction, setSubmittingAction] = useState(false);
 
+  // Custom Toast State
+  const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
+  const showToast = (message, type = 'success') => {
+    setToast({ show: true, message, type });
+    setTimeout(() => {
+      setToast(prev => ({ ...prev, show: false }));
+    }, 4000);
+  };
+
+  // Custom Consent Modal State
+  const [confirmModal, setConfirmModal] = useState({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: null,
+    confirmText: 'Confirm',
+    cancelText: 'Cancel',
+    danger: false
+  });
+  const requestConsent = (title, message, onConfirm, danger = false) => {
+    setConfirmModal({
+      isOpen: true,
+      title,
+      message,
+      onConfirm: () => {
+        onConfirm();
+        setConfirmModal(prev => ({ ...prev, isOpen: false }));
+      },
+      confirmText: 'Confirm',
+      cancelText: 'Cancel',
+      danger
+    });
+  };
+
   // Lightbox Interactive states
   const [zoom, setZoom] = useState(1);
   const [rotation, setRotation] = useState(0);
@@ -58,10 +95,12 @@ export default function KYCReview() {
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   
-  // Annotation states: { [docKey]: [ { x, y, text } ] }
+  // Area Annotation states: { [docKey]: [ { x, y, w, h, text } ] }
   const [annotations, setAnnotations] = useState({});
   const [activeAnnotationText, setActiveAnnotationText] = useState('');
-  const [newAnnCoords, setNewAnnCoords] = useState(null);
+  const [newAnnCoords, setNewAnnCoords] = useState(null); // { x, y, w, h }
+  const [startCoords, setStartCoords] = useState({ x: 0, y: 0 });
+  const [drawing, setDrawing] = useState(false);
   const [annMode, setAnnMode] = useState(false);
 
   const resetLightboxControls = () => {
@@ -71,39 +110,47 @@ export default function KYCReview() {
     setNewAnnCoords(null);
     setActiveAnnotationText('');
     setAnnMode(false);
+    setDrawing(false);
   };
 
   const handleSaveAnnotation = () => {
     if (!activeAnnotationText.trim() || !newAnnCoords || !lightbox.docKey) return;
     
     const docKey = lightbox.docKey;
-    const newAnn = { x: newAnnCoords.x, y: newAnnCoords.y, text: activeAnnotationText };
+    const newAnn = { 
+      x: newAnnCoords.x, 
+      y: newAnnCoords.y, 
+      w: newAnnCoords.w, 
+      h: newAnnCoords.h, 
+      text: activeAnnotationText 
+    };
     
-    setAnnotations(prev => {
-      const list = prev[docKey] || [];
-      const updated = [...list, newAnn];
-      const updatedAll = { ...prev, [docKey]: updated };
-      
-      // Automatically construct objectionComment text from annotations
-      const formattedComments = [];
-      Object.keys(updatedAll).forEach(k => {
-        const listItems = updatedAll[k];
-        if (listItems && listItems.length > 0) {
-          formattedComments.push(`- Objections for ${k.replace('_', ' ')}:`);
-          listItems.forEach((ann, i) => {
-            formattedComments.push(`  * [Marker ${i+1}] ${ann.text}`);
-          });
-        }
-      });
-      setObjectionComment(formattedComments.join('\n'));
-      
-      return updatedAll;
+    const list = annotations[docKey] || [];
+    const updated = [...list, newAnn];
+    const updatedAll = { ...annotations, [docKey]: updated };
+    
+    setAnnotations(updatedAll);
+    
+    // Automatically construct objectionComment text from annotations
+    const formattedComments = [];
+    Object.keys(updatedAll).forEach(k => {
+      const listItems = updatedAll[k];
+      if (listItems && listItems.length > 0) {
+        formattedComments.push(`- Objections for ${k.replace('_', ' ')}:`);
+        listItems.forEach((ann, i) => {
+          formattedComments.push(`  * [Marker ${i+1}] ${ann.text}`);
+        });
+      }
     });
+    setObjectionComment(formattedComments.join('\n'));
 
     if (!selectedObjectionDocs.includes(docKey)) {
       setSelectedObjectionDocs(prev => [...prev, docKey]);
     }
-    setShowObjections(true);
+    
+    // Save to database immediately
+    handleVerifyDoc(docKey, 'rejected', activeAnnotationText, updated);
+    
     setNewAnnCoords(null);
     setActiveAnnotationText('');
   };
@@ -133,9 +180,9 @@ export default function KYCReview() {
       try {
         // Fetch queue metrics counts
         const [pendingOnboardingRes, pendingRes, rejectedRes, approvedRes] = await Promise.all([
-          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', false),
-          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'pending'),
-          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'rejected'),
+          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).or('onboarding_complete.eq.false,kyc_docs.is.null,kyc_docs.eq.{}').neq('kyc_status', 'approved'),
+          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'pending').not('kyc_docs', 'is', null).neq('kyc_docs', '{}'),
+          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'rejected').not('kyc_docs', 'is', null).neq('kyc_docs', '{}'),
           supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'approved')
         ]);
 
@@ -151,11 +198,11 @@ export default function KYCReview() {
         // Fetch paginated queue items
         let query = supabase.from('tutor_profiles').select('*', { count: 'exact' });
         if (filterMode === 'pending_onboarding') {
-          query = query.eq('onboarding_complete', false);
+          query = query.or('onboarding_complete.eq.false,kyc_docs.is.null,kyc_docs.eq.{}').neq('kyc_status', 'approved');
         } else if (filterMode === 'pending') {
-          query = query.eq('onboarding_complete', true).eq('kyc_status', 'pending');
+          query = query.eq('onboarding_complete', true).eq('kyc_status', 'pending').not('kyc_docs', 'is', null).neq('kyc_docs', '{}');
         } else if (filterMode === 'rejected') {
-          query = query.eq('onboarding_complete', true).eq('kyc_status', 'rejected');
+          query = query.eq('onboarding_complete', true).eq('kyc_status', 'rejected').not('kyc_docs', 'is', null).neq('kyc_docs', '{}');
         } else if (filterMode === 'approved') {
           query = query.eq('onboarding_complete', true).eq('kyc_status', 'approved');
         }
@@ -166,7 +213,7 @@ export default function KYCReview() {
         }
 
         const { data, error, count } = await query
-          .order('created_at', { ascending: false })
+          .order(sortField, { ascending: sortAsc })
           .range((page - 1) * pageSize, page * pageSize - 1);
 
         if (error) throw error;
@@ -182,11 +229,13 @@ export default function KYCReview() {
     };
     load();
     return () => { active = false; };
-  }, [page, pageSize, filterMode, searchQuery, reloadTrigger]);
+  }, [page, pageSize, filterMode, searchQuery, reloadTrigger, sortField, sortAsc]);
 
   const handleFilterModeChange = (mode) => {
     setFilterMode(mode);
     setPage(1);
+    setSortField('created_at'); // Reset sorting to default latest signup first
+    setSortAsc(false);
   };
 
   const handleSearchChange = (e) => {
@@ -194,20 +243,46 @@ export default function KYCReview() {
     setPage(1);
   };
 
+  const handleSort = (field) => {
+    if (sortField === field) {
+      setSortAsc(prev => !prev);
+    } else {
+      setSortField(field);
+      setSortAsc(field === 'hourly_rate' ? true : false); // hourly_rate ASC (min to max), kyc_docs DESC (submitted first)
+    }
+    setPage(1);
+  };
+
   // Verify single document
-  const handleVerifyDoc = async (key, status, reason = '') => {
+  const handleVerifyDoc = async (key, status, reason = '', customAnnotations = null) => {
     if (!selectedTutor || adminRole === 'monitor') return;
     const supabase = createClient();
     
     const currentVerifications = selectedTutor.kyc_verifications || {};
+    const currentDoc = currentVerifications[key] || {};
     const newVerifications = {
       ...currentVerifications,
       [key]: {
+        ...currentDoc,
         status,
-        reason,
+        reason: reason || currentDoc.reason || '',
+        annotations: customAnnotations !== null ? customAnnotations : (currentDoc.annotations || []),
         verified_at: new Date().toISOString()
       }
     };
+
+    // If verifying/approving, clear rejection details
+    if (status === 'approved') {
+      newVerifications[key].reason = '';
+      newVerifications[key].annotations = [];
+      
+      // Clear from local annotations state too
+      setAnnotations(prev => {
+        const copy = { ...prev };
+        delete copy[key];
+        return copy;
+      });
+    }
     
     setSubmittingAction(true);
     try {
@@ -221,8 +296,9 @@ export default function KYCReview() {
       // Update local state
       setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_verifications: newVerifications } : t));
       setSelectedTutor(prev => ({ ...prev, kyc_verifications: newVerifications }));
+      showToast(`Document marked as ${status}.`);
     } catch (err) {
-      alert(err.message);
+      showToast(err.message, 'error');
     } finally {
       setSubmittingAction(false);
     }
@@ -232,7 +308,7 @@ export default function KYCReview() {
     const reason = prompt(`Enter rejection reason for ${key.replace('_', ' ')}:`);
     if (reason === null) return; // cancelled
     if (!reason.trim()) {
-      alert("Rejection reason is required.");
+      showToast("Rejection reason is required.", "error");
       return;
     }
     handleVerifyDoc(key, 'rejected', reason.trim());
@@ -243,9 +319,21 @@ export default function KYCReview() {
     if (!selectedTutor) {
       const timer = setTimeout(() => {
         setSignedUrls({});
+        setAnnotations({});
       }, 0);
       return () => clearTimeout(timer);
     }
+
+    const initialAnns = {};
+    const verif = selectedTutor.kyc_verifications || {};
+    Object.keys(verif).forEach(k => {
+      if (verif[k]?.annotations) {
+        initialAnns[k] = verif[k].annotations;
+      }
+    });
+    setTimeout(() => {
+      setAnnotations(initialAnns);
+    }, 0);
 
     const loadUrls = async () => {
       setLoadingDocs(true);
@@ -286,31 +374,46 @@ export default function KYCReview() {
   // Approve Tutor
   const handleApprove = async () => {
     if (!selectedTutor || adminRole === 'monitor') return;
-    if (!confirm('Mark this tutor as Approved and Academic Verified?')) return;
 
-    setSubmittingAction(true);
-    const supabase = createClient();
-    try {
-      const { error } = await supabase
-        .from('tutor_profiles')
-        .update({ 
-          kyc_status: 'approved',
-          verified: true,
-          kyc_objections: {}
-        })
-        .eq('id', selectedTutor.id);
+    // Validation check: A profile cannot get KYC approved without CNIC and Degree documents approval
+    const verif = selectedTutor.kyc_verifications || {};
+    const cnicFrontApproved = verif.cnic_front?.status === 'approved';
+    const cnicBackApproved = verif.cnic_back?.status === 'approved';
+    const degreeApproved = verif.degree?.status === 'approved';
 
-      if (error) throw error;
-
-      // Update state
-      setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_status: 'approved', verified: true, kyc_objections: {} } : t));
-      setSelectedTutor(prev => ({ ...prev, kyc_status: 'approved', verified: true, kyc_objections: {} }));
-      alert('Tutor KYC approved.');
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setSubmittingAction(false);
+    if (!cnicFrontApproved || !cnicBackApproved || !degreeApproved) {
+      showToast("Cannot approve KYC: Both CNIC (front & back) and Degree documents must be approved first.", "error");
+      return;
     }
+
+    requestConsent(
+      'Approve Tutor KYC',
+      'Are you sure you want to mark this tutor as KYC Approved? This will make their profile active in the main app.',
+      async () => {
+        setSubmittingAction(true);
+        const supabase = createClient();
+        try {
+          const { error } = await supabase
+            .from('tutor_profiles')
+            .update({ 
+              kyc_status: 'approved',
+              kyc_objections: {}
+            })
+            .eq('id', selectedTutor.id);
+
+          if (error) throw error;
+
+          // Update state
+          setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_status: 'approved', kyc_objections: {} } : t));
+          setSelectedTutor(prev => ({ ...prev, kyc_status: 'approved', kyc_objections: {} }));
+          showToast('Tutor KYC approved successfully.');
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setSubmittingAction(false);
+        }
+      }
+    );
   };
 
   // Submit Rejection / Objections
@@ -318,7 +421,7 @@ export default function KYCReview() {
     e.preventDefault();
     if (!selectedTutor || adminRole === 'monitor') return;
     if (selectedObjectionDocs.length === 0 || !objectionComment.trim()) {
-      alert('Please select at least one document and write instructions.');
+      showToast('Please select at least one document and write instructions.', 'error');
       return;
     }
 
@@ -346,9 +449,9 @@ export default function KYCReview() {
       setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_status: 'rejected', verified: false, kyc_objections: objectionsData } : t));
       setSelectedTutor(prev => ({ ...prev, kyc_status: 'rejected', verified: false, kyc_objections: objectionsData }));
       setShowObjections(false);
-      alert('Objections submitted successfully.');
+      showToast('Objections submitted successfully.');
     } catch (err) {
-      alert(err.message);
+      showToast(err.message, 'error');
     } finally {
       setSubmittingAction(false);
     }
@@ -359,54 +462,112 @@ export default function KYCReview() {
     if (!selectedTutor || adminRole === 'monitor') return;
     const nextSuspendedState = !selectedTutor.suspended;
     
-    setSubmittingAction(true);
-    const supabase = createClient();
-    try {
-      const { error } = await supabase
-        .from('tutor_profiles')
-        .update({ suspended: nextSuspendedState })
-        .eq('id', selectedTutor.id);
+    requestConsent(
+      nextSuspendedState ? 'Suspend Tutor Account' : 'Unsuspend Tutor Account',
+      nextSuspendedState 
+        ? 'Are you sure you want to suspend this tutor account? They will lose access to their tutor dashboard, onboarding, and will be hidden from all public searches.'
+        : 'Are you sure you want to unsuspend this tutor account? This will restore their active portal and onboarding access.',
+      async () => {
+        setSubmittingAction(true);
+        const supabase = createClient();
+        try {
+          const { error } = await supabase
+            .from('tutor_profiles')
+            .update({ suspended: nextSuspendedState })
+            .eq('id', selectedTutor.id);
 
-      if (error) throw error;
+          if (error) throw error;
 
-      // Update state
-      setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, suspended: nextSuspendedState } : t));
-      setSelectedTutor(prev => ({ ...prev, suspended: nextSuspendedState }));
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setSubmittingAction(false);
-    }
+          // Update state
+          setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, suspended: nextSuspendedState } : t));
+          setSelectedTutor(prev => ({ ...prev, suspended: nextSuspendedState }));
+          showToast(`Account successfully ${nextSuspendedState ? 'suspended' : 'unsuspended'}.`);
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setSubmittingAction(false);
+        }
+      },
+      nextSuspendedState // danger flag is true when suspending
+    );
   };
 
   // Toggle Verification Badge
   const toggleVerification = async () => {
     if (!selectedTutor || adminRole === 'monitor') return;
     if (selectedTutor.kyc_status !== 'approved') {
-      alert("Tutor is not eligible for verified badge until their KYC status is approved.");
+      showToast("Tutor is not eligible for verified badge until their KYC status is approved.", "error");
       return;
     }
     const nextVerifiedState = !selectedTutor.verified;
+    const updatedVerifications = {
+      ...(selectedTutor.kyc_verifications || {}),
+      profile_verified_at: nextVerifiedState ? new Date().toISOString() : null
+    };
     
-    setSubmittingAction(true);
-    const supabase = createClient();
-    try {
-      const { error } = await supabase
-        .from('tutor_profiles')
-        .update({ verified: nextVerifiedState })
-        .eq('id', selectedTutor.id);
+    requestConsent(
+      nextVerifiedState ? 'Grant Verified Premium Badge' : 'Remove Verified Premium Badge',
+      nextVerifiedState
+        ? 'Are you sure you want to grant the Verified Badge (Premium Status) to this tutor?'
+        : 'Are you sure you want to remove the Verified Badge (Premium Status) from this tutor?',
+      async () => {
+        setSubmittingAction(true);
+        const supabase = createClient();
+        try {
+          const { error } = await supabase
+            .from('tutor_profiles')
+            .update({ 
+              verified: nextVerifiedState,
+              kyc_verifications: updatedVerifications
+            })
+            .eq('id', selectedTutor.id);
 
-      if (error) throw error;
+          if (error) throw error;
 
-      // Update state
-      setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, verified: nextVerifiedState } : t));
-      setSelectedTutor(prev => ({ ...prev, verified: nextVerifiedState }));
-      alert(`Verified badge ${nextVerifiedState ? 'granted' : 'removed'} successfully.`);
-    } catch (err) {
-      alert(err.message);
-    } finally {
-      setSubmittingAction(false);
-    }
+          // Update state
+          setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, verified: nextVerifiedState, kyc_verifications: updatedVerifications } : t));
+          setSelectedTutor(prev => ({ ...prev, verified: nextVerifiedState, kyc_verifications: updatedVerifications }));
+          showToast(`Verified badge ${nextVerifiedState ? 'granted' : 'removed'} successfully.`);
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setSubmittingAction(false);
+        }
+      }
+    );
+  };
+
+  // Delete User Account (Super Admin only)
+  const handleDeleteAccount = async () => {
+    if (!selectedTutor || adminRole !== 'super_admin') return;
+    
+    requestConsent(
+      'PERMANENT DELETION',
+      'CRITICAL ACTION: Are you sure you want to permanently delete this tutor account? All documents, profiles, and dashboard data will be deleted forever. This cannot be undone.',
+      async () => {
+        setSubmittingAction(true);
+        try {
+          const res = await fetch(`/api/admins?id=${selectedTutor.id}`, {
+            method: 'DELETE'
+          });
+          const data = await res.json();
+
+          if (!res.ok) {
+            throw new Error(data.error || 'Failed to delete user');
+          }
+
+          // Update state
+          setTutors(prev => prev.filter(t => t.id !== selectedTutor.id));
+          setSelectedTutor(null);
+          showToast('Account permanently deleted.');
+        } catch (err) {
+          showToast(err.message, 'error');
+        } finally {
+          setSubmittingAction(false);
+        }
+      },
+      true // danger flag
+    );
   };
 
   const filteredTutors = tutors;
@@ -442,7 +603,7 @@ export default function KYCReview() {
               boxShadow: 'var(--shadow-subtle)'
             }}
           >
-            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>Pending Onboarding</span>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', display: 'block', textTransform: 'uppercase' }}>Onboarding Incomplete</span>
             <h2 style={{ margin: '4px 0 0 0', color: 'var(--steel)' }}>{counts.pending_onboarding}</h2>
           </div>
 
@@ -518,8 +679,30 @@ export default function KYCReview() {
                   <th style={{ width: '60px' }}>S.#</th>
                   <th>Tutor Info</th>
                   <th>City / Area</th>
-                  <th>Hourly Rate</th>
-                  <th>KYC Documents</th>
+                  <th 
+                    onClick={() => handleSort('hourly_rate')}
+                    style={{ cursor: 'pointer', userSelect: 'none' }}
+                    title="Click to sort by Hourly Rate"
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      Hourly Rate
+                      <span style={{ fontSize: '11px', color: sortField === 'hourly_rate' ? 'var(--brand-green)' : 'var(--steel)' }}>
+                        {sortField === 'hourly_rate' ? (sortAsc ? '▲' : '▼') : '↕'}
+                      </span>
+                    </div>
+                  </th>
+                  <th 
+                    onClick={() => handleSort('kyc_docs')}
+                    style={{ cursor: 'pointer', userSelect: 'none' }}
+                    title="Click to sort by KYC Document Submissions"
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                      KYC Documents
+                      <span style={{ fontSize: '11px', color: sortField === 'kyc_docs' ? 'var(--brand-green)' : 'var(--steel)' }}>
+                        {sortField === 'kyc_docs' ? (sortAsc ? '▲' : '▼') : '↕'}
+                      </span>
+                    </div>
+                  </th>
                   <th>Status</th>
                 </tr>
               </thead>
@@ -572,6 +755,8 @@ export default function KYCReview() {
                     <td>
                       {tutor.suspended ? (
                         <span className="admin-badge admin-badge-red">Suspended</span>
+                      ) : (!tutor.onboarding_complete || !tutor.kyc_docs || Object.keys(tutor.kyc_docs).length === 0) ? (
+                        <span className="admin-badge admin-badge-grey">Onboarding Incomplete</span>
                       ) : tutor.kyc_status === 'approved' ? (
                         <span className="admin-badge admin-badge-green">Approved</span>
                       ) : tutor.kyc_status === 'pending' ? (
@@ -601,7 +786,7 @@ export default function KYCReview() {
               <span style={{ fontSize: '13px', color: 'var(--steel)' }}>
                 Showing <strong>{totalCount === 0 ? 0 : (page - 1) * pageSize + 1}</strong> to <strong>{Math.min(page * pageSize, totalCount)}</strong> of <strong>{totalCount}</strong> tutors
               </span>
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button 
                   className="admin-btn admin-btn-secondary"
                   style={{ padding: '6px 12px', fontSize: '13px' }}
@@ -610,6 +795,57 @@ export default function KYCReview() {
                 >
                   Previous
                 </button>
+                {(() => {
+                  const totalPages = Math.ceil(totalCount / pageSize);
+                  const pages = [];
+                  const maxVisible = 5;
+                  let start = Math.max(1, page - Math.floor(maxVisible / 2));
+                  let end = Math.min(totalPages, start + maxVisible - 1);
+                  if (end - start + 1 < maxVisible) {
+                    start = Math.max(1, end - maxVisible + 1);
+                  }
+                  for (let i = start; i <= end; i++) {
+                    pages.push(i);
+                  }
+                  return (
+                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                      {start > 1 && (
+                        <>
+                          <button
+                            className={`admin-btn ${page === 1 ? 'admin-btn-primary' : 'admin-btn-secondary'}`}
+                            style={{ padding: '6px 12px', fontSize: '13px', minWidth: '32px' }}
+                            onClick={() => setPage(1)}
+                          >
+                            1
+                          </button>
+                          {start > 2 && <span style={{ padding: '0 4px', color: 'var(--steel)', fontSize: '13px' }}>...</span>}
+                        </>
+                      )}
+                      {pages.map(p => (
+                        <button
+                          key={p}
+                          className={`admin-btn ${page === p ? 'admin-btn-primary' : 'admin-btn-secondary'}`}
+                          style={{ padding: '6px 12px', fontSize: '13px', minWidth: '32px' }}
+                          onClick={() => setPage(p)}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                      {end < totalPages && (
+                        <>
+                          {end < totalPages - 1 && <span style={{ padding: '0 4px', color: 'var(--steel)', fontSize: '13px' }}>...</span>}
+                          <button
+                            className={`admin-btn ${page === totalPages ? 'admin-btn-primary' : 'admin-btn-secondary'}`}
+                            style={{ padding: '6px 12px', fontSize: '13px', minWidth: '32px' }}
+                            onClick={() => setPage(totalPages)}
+                          >
+                            {totalPages}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
                 <button 
                   className="admin-btn admin-btn-secondary"
                   style={{ padding: '6px 12px', fontSize: '13px' }}
@@ -650,7 +886,66 @@ export default function KYCReview() {
 
             <div style={{ flex: 1, padding: '24px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '20px' }}>
               
-              <div style={{ display: 'flex', gap: '16px', alignItems: 'center', justifyContent: 'space-between', padding: '16px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-lg)', backgroundColor: 'var(--surface-soft)' }}>
+              {/* KYC Status & Verification Badge Toggle Above Card */}
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <span className={`admin-badge ${
+                    selectedTutor.suspended 
+                      ? 'admin-badge-red' 
+                      : (!selectedTutor.onboarding_complete || !selectedTutor.kyc_docs || Object.keys(selectedTutor.kyc_docs).length === 0)
+                        ? 'admin-badge-grey'
+                        : selectedTutor.kyc_status === 'approved' 
+                          ? 'admin-badge-green' 
+                          : selectedTutor.kyc_status === 'rejected' 
+                            ? 'admin-badge-purple' 
+                            : 'admin-badge-orange'
+                  }`}>
+                    {selectedTutor.suspended 
+                      ? 'Suspended' 
+                      : (!selectedTutor.onboarding_complete || !selectedTutor.kyc_docs || Object.keys(selectedTutor.kyc_docs).length === 0)
+                        ? 'Onboarding Incomplete'
+                        : `KYC status: ${selectedTutor.kyc_status}`}
+                  </span>
+                                   {/* Verified Badge Pill (Informational Only, Hidden when unverified) */}
+                  {selectedTutor.verified && (
+                    <span
+                      style={{
+                        background: 'var(--brand-green-soft)',
+                        border: '1px solid var(--brand-green)',
+                        padding: '4px 10px',
+                        borderRadius: '999px',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                        cursor: 'help'
+                      }}
+                      title={`Verified on ${(() => {
+                        const verifiedAt = selectedTutor.kyc_verifications?.profile_verified_at || selectedTutor.kyc_verifications?.approved_at || selectedTutor.created_at;
+                        if (!verifiedAt) return 'JUL 2026';
+                        const d = new Date(verifiedAt);
+                        const month = d.toLocaleDateString('en-US', { month: 'short' }).toUpperCase();
+                        const year = d.getFullYear();
+                        return `${month} ${year}`;
+                      })()}`}
+                    >
+                      <img 
+                        src="/shield.svg" 
+                        alt="Verified" 
+                        style={{ 
+                          width: '14px', 
+                          height: '14px' 
+                        }} 
+                      />
+                      <span style={{ fontSize: '11px', fontWeight: 700, color: 'var(--brand-green-dark)' }}>
+                        VERIFIED
+                      </span>
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Tutor Profile Summary Card (Name Card) */}
+              <div style={{ display: 'flex', gap: '16px', alignItems: 'center', padding: '16px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-lg)', backgroundColor: 'var(--surface-soft)', justifyContent: 'space-between' }}>
                 <div style={{ display: 'flex', gap: '16px', alignItems: 'center', flex: 1 }}>
                   {selectedTutor.avatar_url ? (
                     <img 
@@ -670,7 +965,7 @@ export default function KYCReview() {
                   </div>
                 </div>
 
-                {/* Verification Shield Icon */}
+                {/* Shield Toggle Icon on the right side of the card */}
                 <button
                   onClick={toggleVerification}
                   style={{
@@ -681,31 +976,24 @@ export default function KYCReview() {
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    opacity: selectedTutor.kyc_status === 'approved' ? 1 : 0.4
+                    opacity: selectedTutor.kyc_status === 'approved' ? 1 : 0.4,
+                    transition: 'transform 0.2s ease',
                   }}
                   title={selectedTutor.kyc_status === 'approved' ? (selectedTutor.verified ? "Remove Verified Badge" : "Give Verified Badge") : "Approve KYC first then verify the profile."}
                   disabled={submittingAction}
+                  onMouseEnter={(e) => { if (selectedTutor.kyc_status === 'approved') e.currentTarget.style.transform = 'scale(1.1)'; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.transform = 'scale(1)'; }}
                 >
                   <img 
                     src="/shield.svg" 
-                    alt="Verified" 
+                    alt="Verified Toggle" 
                     style={{ 
                       width: '32px', 
                       height: '32px', 
-                      filter: selectedTutor.verified ? 'none' : 'grayscale(100%) contrast(50%)' 
+                      filter: selectedTutor.verified ? 'none' : 'grayscale(100%) opacity(30%)' 
                     }} 
                   />
                 </button>
-              </div>
-
-              <div>
-                <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', textTransform: 'uppercase', display: 'block', marginBottom: '6px' }}>KYC Status</span>
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                  <span className={`admin-badge ${selectedTutor.suspended ? 'admin-badge-red' : selectedTutor.kyc_status === 'approved' ? 'admin-badge-green' : 'admin-badge-orange'}`}>
-                    {selectedTutor.suspended ? 'Suspended' : `KYC status: ${selectedTutor.kyc_status}`}
-                  </span>
-                  {selectedTutor.verified && <img src="/shield.svg" alt="Verified" style={{ width: '15px', height: '15px', verticalAlign: 'middle' }} />}
-                </div>
               </div>
 
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '16px', fontSize: '13px' }}>
@@ -917,16 +1205,38 @@ export default function KYCReview() {
                     </div>
                   )}
 
-                  <div style={{ display: 'flex', gap: '12px' }}>
-
-                    <button 
-                      onClick={toggleSuspension} 
-                      className={`admin-btn ${selectedTutor.suspended ? 'admin-btn-primary' : 'admin-btn-secondary'}`} 
-                      style={{ flex: 1 }}
-                      disabled={submittingAction}
-                    >
-                      {selectedTutor.suspended ? <><UserCheck size={14} /> Lift Ban</> : <><UserX size={14} /> Suspend Account</>}
-                    </button>
+                  <div style={{ display: 'flex', gap: '12px', width: '100%' }}>
+                    {selectedTutor.suspended ? (
+                      <>
+                        <button 
+                          onClick={toggleSuspension} 
+                          className="admin-btn" 
+                          style={{ flex: 1, backgroundColor: 'var(--brand-green)', color: '#fff', border: 'none' }}
+                          disabled={submittingAction}
+                        >
+                          <UserCheck size={14} /> Unsuspend
+                        </button>
+                        {adminRole === 'super_admin' && (
+                          <button 
+                            onClick={handleDeleteAccount} 
+                            className="admin-btn admin-btn-danger" 
+                            style={{ flex: 1 }}
+                            disabled={submittingAction}
+                          >
+                            <Trash2 size={14} /> Delete Account
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      <button 
+                        onClick={toggleSuspension} 
+                        className="admin-btn admin-btn-secondary" 
+                        style={{ flex: 1 }}
+                        disabled={submittingAction}
+                      >
+                        <UserX size={14} /> Suspend Account
+                      </button>
+                    )}
                   </div>
                 </>
               )}
@@ -986,20 +1296,47 @@ export default function KYCReview() {
                     const rect = e.currentTarget.getBoundingClientRect();
                     const x = ((e.clientX - rect.left) / rect.width) * 100;
                     const y = ((e.clientY - rect.top) / rect.height) * 100;
-                    setNewAnnCoords({ x, y });
+                    setStartCoords({ x, y });
+                    setNewAnnCoords({ x, y, w: 0, h: 0 });
+                    setDrawing(true);
                     return;
                   }
                   setIsDragging(true);
                   setDragStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
                 }}
                 onMouseMove={(e) => {
+                  if (annMode && drawing && newAnnCoords) {
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const currentX = ((e.clientX - rect.left) / rect.width) * 100;
+                    const currentY = ((e.clientY - rect.top) / rect.height) * 100;
+                    const left = Math.min(startCoords.x, currentX);
+                    const top = Math.min(startCoords.y, currentY);
+                    const width = Math.abs(currentX - startCoords.x);
+                    const height = Math.abs(currentY - startCoords.y);
+                    setNewAnnCoords({ x: left, y: top, w: width, h: height });
+                    return;
+                  }
                   if (!isDragging || annMode) return;
                   setPanOffset({
                     x: e.clientX - dragStart.x,
                     y: e.clientY - dragStart.y
                   });
                 }}
-                onMouseUp={() => setIsDragging(false)}
+                onMouseUp={(e) => {
+                  if (annMode && drawing) {
+                    setDrawing(false);
+                    const rect = e.currentTarget.getBoundingClientRect();
+                    const currentX = ((e.clientX - rect.left) / rect.width) * 100;
+                    const currentY = ((e.clientY - rect.top) / rect.height) * 100;
+                    const left = Math.min(startCoords.x, currentX);
+                    const top = Math.min(startCoords.y, currentY);
+                    const width = Math.max(1, Math.abs(currentX - startCoords.x)); // min 1% size
+                    const height = Math.max(1, Math.abs(currentY - startCoords.y)); // min 1% size
+                    setNewAnnCoords({ x: left, y: top, w: width, h: height });
+                    return;
+                  }
+                  setIsDragging(false);
+                }}
                 onMouseLeave={() => setIsDragging(false)}
               >
                 {lightbox.url.includes('.pdf') || lightbox.url.includes('/pdf') ? (
@@ -1031,25 +1368,29 @@ export default function KYCReview() {
                           position: 'absolute',
                           left: `${ann.x}%`,
                           top: `${ann.y}%`,
-                          transform: `translate(-50%, -50%) translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
-                          transformOrigin: 'center center',
-                          width: '20px',
-                          height: '20px',
-                          borderRadius: '50%',
-                          backgroundColor: '#FF5252',
-                          border: '2px solid white',
-                          color: 'white',
-                          fontSize: '10px',
-                          fontWeight: 'bold',
-                          display: 'flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          cursor: 'pointer',
+                          width: `${ann.w}%`,
+                          height: `${ann.h}%`,
+                          transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
+                          transformOrigin: 'top left',
+                          border: '2px solid #FF5252',
+                          backgroundColor: 'rgba(255, 82, 82, 0.15)',
+                          pointerEvents: 'none',
                           zIndex: 100
                         }}
-                        title={ann.text}
                       >
-                        {idx + 1}
+                        <span style={{
+                          position: 'absolute',
+                          top: '2px',
+                          left: '2px',
+                          backgroundColor: '#FF5252',
+                          color: '#fff',
+                          fontSize: '9px',
+                          fontWeight: 'bold',
+                          padding: '1px 4px',
+                          borderRadius: '2px'
+                        }}>
+                          Area {idx + 1}
+                        </span>
                       </div>
                     ))}
 
@@ -1059,18 +1400,37 @@ export default function KYCReview() {
                           position: 'absolute',
                           left: `${newAnnCoords.x}%`,
                           top: `${newAnnCoords.y}%`,
-                          transform: 'translate(-50%, -105%)',
+                          width: `${newAnnCoords.w}%`,
+                          height: `${newAnnCoords.h}%`,
+                          transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
+                          transformOrigin: 'top left',
+                          border: '2px dashed var(--brand-green)',
+                          backgroundColor: 'rgba(0, 237, 100, 0.15)',
+                          pointerEvents: 'none',
+                          zIndex: 101
+                        }}
+                      />
+                    )}
+
+                    {newAnnCoords && !drawing && (
+                      <div 
+                        style={{
+                          position: 'absolute',
+                          left: `${newAnnCoords.x + newAnnCoords.w / 2}%`,
+                          top: `${newAnnCoords.y + newAnnCoords.h}%`,
+                          transform: `translate(-50%, 8px) translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoom})`,
+                          transformOrigin: 'top center',
                           backgroundColor: 'var(--canvas-dark)',
                           border: '2px solid var(--brand-green)',
                           borderRadius: 'var(--rounded-md)',
                           padding: '12px',
                           boxShadow: 'var(--shadow-modal)',
                           zIndex: 500,
-                          width: '220px'
+                          width: '240px'
                         }}
                         onClick={(e) => e.stopPropagation()}
                       >
-                        <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--ink)', marginBottom: '6px' }}>Pin objection note:</div>
+                        <div style={{ fontSize: '11px', fontWeight: 600, color: 'var(--ink)', marginBottom: '6px' }}>Area objection note:</div>
                         <input 
                           type="text"
                           autoFocus
@@ -1090,13 +1450,13 @@ export default function KYCReview() {
                             style={{ padding: '4px 8px', fontSize: '10px', height: '24px', flex: 1 }}
                             onClick={handleSaveAnnotation}
                           >
-                            Add
+                            Add Note
                           </button>
                           <button 
                             type="button" 
                             className="admin-btn admin-btn-secondary" 
                             style={{ padding: '4px 8px', fontSize: '10px', height: '24px', flex: 1 }}
-                            onClick={() => setNewAnnCoords(null)}
+                            onClick={() => { setNewAnnCoords(null); setActiveAnnotationText(''); }}
                           >
                             Cancel
                           </button>
@@ -1223,12 +1583,137 @@ export default function KYCReview() {
                       ))
                     )}
                   </div>
+
+                  {/* View Mode Document Verification Actions */}
+                  {lightbox.docKey && (
+                    <div style={{ 
+                      padding: '16px', 
+                      borderTop: '1px solid var(--hairline)', 
+                      backgroundColor: 'var(--surface-soft)', 
+                      display: 'flex', 
+                      gap: '12px',
+                      marginTop: 'auto'
+                    }}>
+                      <button
+                        onClick={() => {
+                          handleVerifyDoc(lightbox.docKey, 'approved');
+                        }}
+                        className="admin-btn"
+                        style={{ 
+                          flex: 1, 
+                          backgroundColor: 'var(--brand-green)', 
+                          color: '#fff', 
+                          border: 'none',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px',
+                          padding: '10px',
+                          fontWeight: 'bold',
+                          cursor: 'pointer',
+                          borderRadius: 'var(--rounded-md)'
+                        }}
+                        disabled={submittingAction || adminRole === 'monitor'}
+                      >
+                        <Check size={16} /> Approve
+                      </button>
+                      <button
+                        onClick={() => {
+                          handleRejectDoc(lightbox.docKey);
+                        }}
+                        className="admin-btn admin-btn-danger"
+                        style={{ 
+                          flex: 1, 
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          gap: '6px',
+                          padding: '10px',
+                          fontWeight: 'bold',
+                          cursor: 'pointer',
+                          borderRadius: 'var(--rounded-md)'
+                        }}
+                        disabled={submittingAction || adminRole === 'monitor'}
+                      >
+                        <X size={16} /> Reject
+                      </button>
+                    </div>
+                  )}
+
                 </div>
               </div>
 
             </div>
           </div>
         </div>
+      )}
+
+      {/* Toast container */}
+      {toast.show && (
+        <div style={{
+          position: 'fixed',
+          top: '24px',
+          right: '24px',
+          backgroundColor: toast.type === 'error' ? '#EF4444' : 'var(--brand-green-dark)',
+          color: '#fff',
+          padding: '12px 24px',
+          borderRadius: 'var(--rounded-md)',
+          boxShadow: 'var(--shadow-lg)',
+          zIndex: 9999,
+          fontWeight: 600,
+          fontSize: '14px',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          border: toast.type === 'error' ? '1px solid #F87171' : '1px solid var(--brand-green)'
+        }}>
+          {toast.type === 'error' ? <X size={16} /> : <Check size={16} />}
+          {toast.message}
+        </div>
+      )}
+
+      {/* Consent Modal overlay & dialog */}
+      {confirmModal.isOpen && (
+        <>
+          <div 
+            style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.6)', zIndex: 9998 }}
+            onClick={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+          />
+          <div style={{
+            position: 'fixed',
+            top: '50%',
+            left: '50%',
+            transform: 'translate(-50%, -50%)',
+            backgroundColor: 'var(--canvas)',
+            borderRadius: 'var(--rounded-lg)',
+            border: '1px solid var(--hairline)',
+            boxShadow: 'var(--shadow-xl)',
+            padding: '24px',
+            width: '400px',
+            maxWidth: '90%',
+            zIndex: 9999,
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '16px'
+          }}>
+            <h4 style={{ margin: 0, fontSize: '18px', fontWeight: 700, color: 'var(--ink)' }}>{confirmModal.title}</h4>
+            <p style={{ margin: 0, fontSize: '14px', color: 'var(--slate)', lineHeight: 1.5 }}>{confirmModal.message}</p>
+            <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end', marginTop: '8px' }}>
+              <button 
+                className="admin-btn admin-btn-secondary" 
+                onClick={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+              >
+                {confirmModal.cancelText}
+              </button>
+              <button 
+                className={`admin-btn ${confirmModal.danger ? 'admin-btn-danger' : 'admin-btn-primary'}`}
+                onClick={confirmModal.onConfirm}
+              >
+                {confirmModal.confirmText}
+              </button>
+            </div>
+          </div>
+        </>
       )}
 
     </div>

@@ -292,7 +292,7 @@ export default function ContactQueries() {
               <span style={{ fontSize: '13px', color: 'var(--steel)' }}>
                 Showing <strong>{totalCount === 0 ? 0 : (page - 1) * pageSize + 1}</strong> to <strong>{Math.min(page * pageSize, totalCount)}</strong> of <strong>{totalCount}</strong> queries
               </span>
-              <div style={{ display: 'flex', gap: '8px' }}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <button 
                   className="admin-btn admin-btn-secondary"
                   style={{ padding: '6px 12px', fontSize: '13px' }}
@@ -301,6 +301,57 @@ export default function ContactQueries() {
                 >
                   Previous
                 </button>
+                {(() => {
+                  const totalPages = Math.ceil(totalCount / pageSize);
+                  const pages = [];
+                  const maxVisible = 5;
+                  let start = Math.max(1, page - Math.floor(maxVisible / 2));
+                  let end = Math.min(totalPages, start + maxVisible - 1);
+                  if (end - start + 1 < maxVisible) {
+                    start = Math.max(1, end - maxVisible + 1);
+                  }
+                  for (let i = start; i <= end; i++) {
+                    pages.push(i);
+                  }
+                  return (
+                    <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+                      {start > 1 && (
+                        <>
+                          <button
+                            className={`admin-btn ${page === 1 ? 'admin-btn-primary' : 'admin-btn-secondary'}`}
+                            style={{ padding: '6px 12px', fontSize: '13px', minWidth: '32px' }}
+                            onClick={() => setPage(1)}
+                          >
+                            1
+                          </button>
+                          {start > 2 && <span style={{ padding: '0 4px', color: 'var(--steel)', fontSize: '13px' }}>...</span>}
+                        </>
+                      )}
+                      {pages.map(p => (
+                        <button
+                          key={p}
+                          className={`admin-btn ${page === p ? 'admin-btn-primary' : 'admin-btn-secondary'}`}
+                          style={{ padding: '6px 12px', fontSize: '13px', minWidth: '32px' }}
+                          onClick={() => setPage(p)}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                      {end < totalPages && (
+                        <>
+                          {end < totalPages - 1 && <span style={{ padding: '0 4px', color: 'var(--steel)', fontSize: '13px' }}>...</span>}
+                          <button
+                            className={`admin-btn ${page === totalPages ? 'admin-btn-primary' : 'admin-btn-secondary'}`}
+                            style={{ padding: '6px 12px', fontSize: '13px', minWidth: '32px' }}
+                            onClick={() => setPage(totalPages)}
+                          >
+                            {totalPages}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
                 <button 
                   className="admin-btn admin-btn-secondary"
                   style={{ padding: '6px 12px', fontSize: '13px' }}
