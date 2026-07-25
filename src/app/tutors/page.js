@@ -371,14 +371,21 @@ export default function AdminTutors() {
         : 'Are you sure you want to unsuspend this tutor account? This will restore their active portal and onboarding access.',
       async () => {
         setSubmittingAction(true);
-        const supabase = createClient();
         try {
-          const { error } = await supabase
-            .from('tutor_profiles')
-            .update({ suspended: nextSuspendedState })
-            .eq('id', selectedTutor.id);
-
-          if (error) throw error;
+          const res = await fetch('/api/admin/tutors', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'TOGGLE_SUSPENSION',
+              tutorId: selectedTutor.id,
+              value: nextSuspendedState,
+              userId: selectedTutor.id,
+              targetEmail: selectedTutor.email,
+              targetName: selectedTutor.full_name
+            })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error?.message || 'Failed to toggle suspension');
 
           // Update state
           setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, suspended: nextSuspendedState } : t));
@@ -414,17 +421,21 @@ export default function AdminTutors() {
         : 'Are you sure you want to remove the Verified Badge (Premium Status) from this tutor?',
       async () => {
         setSubmittingAction(true);
-        const supabase = createClient();
         try {
-          const { error } = await supabase
-            .from('tutor_profiles')
-            .update({ 
-              verified: nextVerifiedState,
-              kyc_verifications: updatedVerifications
+          const res = await fetch('/api/admin/tutors', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'TOGGLE_VERIFICATION',
+              tutorId: selectedTutor.id,
+              value: nextVerifiedState,
+              userId: selectedTutor.id,
+              targetEmail: selectedTutor.email,
+              targetName: selectedTutor.full_name
             })
-            .eq('id', selectedTutor.id);
-
-          if (error) throw error;
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error?.message || 'Failed to toggle verification');
 
           // Update state
           setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, verified: nextVerifiedState, kyc_verifications: updatedVerifications } : t));

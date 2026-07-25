@@ -259,44 +259,52 @@ export default function KYCReview() {
     const supabase = createClient();
     
     const currentVerifications = selectedTutor.kyc_verifications || {};
-    const currentDoc = currentVerifications[key] || {};
-    const newVerifications = {
-      ...currentVerifications,
-      [key]: {
+    let keysToUpdate = [key];
+    if (key === 'cnic') {
+      keysToUpdate = ['cnic_front', 'cnic_back'];
+    }
+
+    let newVerifications = { ...currentVerifications };
+    keysToUpdate.forEach(k => {
+      const currentDoc = currentVerifications[k] || {};
+      newVerifications[k] = {
         ...currentDoc,
         status,
         reason: reason || currentDoc.reason || '',
         annotations: customAnnotations !== null ? customAnnotations : (currentDoc.annotations || []),
         verified_at: new Date().toISOString()
+      };
+      if (status === 'approved') {
+        newVerifications[k].reason = '';
+        newVerifications[k].annotations = [];
       }
-    };
+    });
 
-    // If verifying/approving, clear rejection details
     if (status === 'approved') {
-      newVerifications[key].reason = '';
-      newVerifications[key].annotations = [];
-      
-      // Clear from local annotations state too
       setAnnotations(prev => {
         const copy = { ...prev };
-        delete copy[key];
+        keysToUpdate.forEach(k => delete copy[k]);
         return copy;
       });
     }
     
     setSubmittingAction(true);
     try {
-      const { error } = await supabase
-        .from('tutor_profiles')
-        .update({ kyc_verifications: newVerifications })
-        .eq('id', selectedTutor.id);
-        
-      if (error) throw error;
-      
-      // Update local state
+      const res = await fetch('/api/admin/kyc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'UPDATE_VERIFICATION',
+          tutorId: selectedTutor.id,
+          kyc_verifications: newVerifications
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || 'Failed to update document verification status');
+
       setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_verifications: newVerifications } : t));
       setSelectedTutor(prev => ({ ...prev, kyc_verifications: newVerifications }));
-      showToast(`Document marked as ${status}.`);
+      showToast(`Document(s) marked as ${status}.`);
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -391,17 +399,20 @@ export default function KYCReview() {
       'Are you sure you want to mark this tutor as KYC Approved? This will make their profile active in the main app.',
       async () => {
         setSubmittingAction(true);
-        const supabase = createClient();
         try {
-          const { error } = await supabase
-            .from('tutor_profiles')
-            .update({ 
-              kyc_status: 'approved',
-              kyc_objections: {}
+          const res = await fetch('/api/admin/kyc', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'APPROVE_KYC',
+              tutorId: selectedTutor.id,
+              userId: selectedTutor.id,
+              targetEmail: selectedTutor.email,
+              targetName: selectedTutor.full_name
             })
-            .eq('id', selectedTutor.id);
-
-          if (error) throw error;
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error?.message || 'Failed to approve KYC');
 
           // Update state
           setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_status: 'approved', kyc_objections: {} } : t));
@@ -426,7 +437,6 @@ export default function KYCReview() {
     }
 
     setSubmittingAction(true);
-    const supabase = createClient();
     try {
       const objectionsData = {
         flagged_documents: selectedObjectionDocs,
@@ -434,16 +444,20 @@ export default function KYCReview() {
         rejected_at: new Date().toISOString()
       };
 
-      const { error } = await supabase
-        .from('tutor_profiles')
-        .update({
-          kyc_status: 'rejected',
-          verified: false,
-          kyc_objections: objectionsData
+      const res = await fetch('/api/admin/kyc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'REJECT_KYC',
+          tutorId: selectedTutor.id,
+          objections: [objectionComment], // Note: Pass the comment string for now, could refine backend mapping
+          userId: selectedTutor.id,
+          targetEmail: selectedTutor.email,
+          targetName: selectedTutor.full_name
         })
-        .eq('id', selectedTutor.id);
-
-      if (error) throw error;
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error?.message || 'Failed to reject KYC');
 
       // Update state
       setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_status: 'rejected', verified: false, kyc_objections: objectionsData } : t));
@@ -469,14 +483,18 @@ export default function KYCReview() {
         : 'Are you sure you want to unsuspend this tutor account? This will restore their active portal and onboarding access.',
       async () => {
         setSubmittingAction(true);
-        const supabase = createClient();
         try {
-          const { error } = await supabase
-            .from('tutor_profiles')
-            .update({ suspended: nextSuspendedState })
-            .eq('id', selectedTutor.id);
-
-          if (error) throw error;
+          const res = await fetch('/api/admin/kyc', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'TOGGLE_SUSPENSION',
+              tutorId: selectedTutor.id,
+              suspended: nextSuspendedState
+            })
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error?.message || 'Failed to update suspension state');
 
           // Update state
           setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, suspended: nextSuspendedState } : t));
@@ -512,17 +530,23 @@ export default function KYCReview() {
         : 'Are you sure you want to remove the Verified Badge (Premium Status) from this tutor?',
       async () => {
         setSubmittingAction(true);
-        const supabase = createClient();
         try {
-          const { error } = await supabase
-            .from('tutor_profiles')
-            .update({ 
-              verified: nextVerifiedState,
-              kyc_verifications: updatedVerifications
+          // If we also want to preserve the `kyc_verifications` profile_verified_at, we can let the backend handle it or pass it.
+          // For now, our backend /api/admin/tutors only handles `verified`. We'll rely on that.
+          const res = await fetch('/api/admin/tutors', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'TOGGLE_VERIFICATION',
+              tutorId: selectedTutor.id,
+              value: nextVerifiedState,
+              userId: selectedTutor.id,
+              targetEmail: selectedTutor.email,
+              targetName: selectedTutor.full_name
             })
-            .eq('id', selectedTutor.id);
-
-          if (error) throw error;
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error?.message || 'Failed to toggle verification');
 
           // Update state
           setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, verified: nextVerifiedState, kyc_verifications: updatedVerifications } : t));
@@ -1048,107 +1072,204 @@ export default function KYCReview() {
                 ) : !selectedTutor.kyc_docs || Object.keys(selectedTutor.kyc_docs).length === 0 ? (
                   <p style={{ fontSize: '12px', color: 'var(--steel)' }}>No verification documents uploaded.</p>
                 ) : (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {Object.keys(selectedTutor.kyc_docs).map((key) => {
-                      const docUrl = signedUrls[key];
-                      const isArray = Array.isArray(docUrl);
-                      const vState = selectedTutor.kyc_verifications?.[key];
-                      const docStatus = vState?.status || 'pending';
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                    {(() => {
+                      const verif = selectedTutor.kyc_verifications || {};
+                      const docs = selectedTutor.kyc_docs || {};
+
+                      // Group 1: CNIC (Front & Back)
+                      const hasFront = !!docs.cnic_front;
+                      const hasBack = !!docs.cnic_back;
+                      const hasCnic = hasFront || hasBack;
+
+                      const cnicFrontStatus = verif.cnic_front?.status;
+                      const cnicBackStatus = verif.cnic_back?.status;
+                      
+                      const isCnicApproved = cnicFrontStatus === 'approved' && cnicBackStatus === 'approved';
+                      const isCnicRejected = cnicFrontStatus === 'rejected' || cnicBackStatus === 'rejected';
+                      const cnicStatus = isCnicApproved ? 'approved' : isCnicRejected ? 'rejected' : hasCnic ? 'pending' : 'not_submitted';
+
+                      const cnicRejectionNotes = [];
+                      if (cnicFrontStatus === 'rejected' && verif.cnic_front?.reason) cnicRejectionNotes.push(`Front: ${verif.cnic_front.reason}`);
+                      if (cnicBackStatus === 'rejected' && verif.cnic_back?.reason) cnicRejectionNotes.push(`Back: ${verif.cnic_back.reason}`);
+
+                      // Group 2: Degree
+                      const hasDegree = !!docs.degree;
+                      const degreeStatus = verif.degree?.status || (hasDegree ? 'pending' : 'not_submitted');
+                      const isDegreeApproved = degreeStatus === 'approved';
 
                       return (
-                        <div key={key} style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-md)', backgroundColor: 'var(--surface-soft)' }}>
-                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                              <span style={{ fontSize: '13px', textTransform: 'capitalize', fontWeight: 500 }}>
-                                {key.replace('_', ' ')}
-                              </span>
-                              {docStatus === 'approved' ? (
-                                <span style={{ fontSize: '10px', color: 'var(--brand-green-dark)', backgroundColor: 'var(--brand-green-soft)', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>Verified</span>
-                              ) : docStatus === 'rejected' ? (
-                                <span 
-                                  style={{ fontSize: '10px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, cursor: 'help' }}
-                                  title={`Objection: ${vState.reason}`}
-                                >
-                                  Rejected (?)
-                                </span>
-                              ) : (
-                                <span style={{ fontSize: '10px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '2px 6px', borderRadius: '4px', fontWeight: 600 }}>Unverified</span>
-                              )}
-                            </div>
+                        <>
+                          {/* 1. CNIC Verification Card */}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-md)', backgroundColor: 'var(--surface-soft)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontSize: '13px', fontWeight: 600 }}>1. CNIC (Front & Back)</span>
+                                {cnicStatus === 'approved' ? (
+                                  <span style={{ fontSize: '10px', color: 'var(--brand-green-dark)', backgroundColor: 'var(--brand-green-soft)', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>✓ VERIFIED</span>
+                                ) : cnicStatus === 'rejected' ? (
+                                  <span style={{ fontSize: '10px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>REJECTED</span>
+                                ) : hasCnic ? (
+                                  <span style={{ fontSize: '10px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>UNVERIFIED</span>
+                                ) : (
+                                  <span style={{ fontSize: '10px', color: 'var(--steel)', backgroundColor: 'var(--canvas)', padding: '2px 8px', borderRadius: '4px' }}>Not Uploaded</span>
+                                )}
+                              </div>
 
-                            <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                              {isArray ? (
-                                docUrl.map((url, i) => (
-                                  <div key={i} style={{ display: 'flex', gap: '4px' }}>
+                              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                {hasCnic && (
+                                  <button
+                                    onClick={() => {
+                                      const frontUrl = signedUrls['cnic_front'];
+                                      const backUrl = signedUrls['cnic_back'];
+                                      setLightbox({ 
+                                        isOpen: true, 
+                                        url: frontUrl || backUrl, 
+                                        urls: [frontUrl, backUrl].filter(Boolean),
+                                        activeUrlIndex: 0,
+                                        title: 'CNIC (Identity Document)', 
+                                        docKey: 'cnic_front' 
+                                      });
+                                    }}
+                                    className="admin-btn admin-btn-secondary"
+                                    style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px' }}
+                                  >
+                                    <Eye size={12} /> View Both
+                                  </button>
+                                )}
+
+                                {/* HIDE Check & Cross controls when already approved! */}
+                                {!isCnicApproved && hasCnic && (
+                                  <>
                                     <button
-                                      onClick={() => setLightbox({ isOpen: true, url, title: `${key.replace('_', ' ')} (${i + 1})`, docKey: key })}
-                                      className="admin-btn admin-btn-secondary"
-                                      style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px' }}
+                                      onClick={() => handleVerifyDoc('cnic', 'approved')}
+                                      style={{
+                                        backgroundColor: 'transparent',
+                                        border: '1px solid var(--brand-green-dark)',
+                                        color: 'var(--brand-green-dark)',
+                                        cursor: 'pointer',
+                                        padding: '4px 8px',
+                                        borderRadius: '4px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                      }}
+                                      disabled={adminRole === 'monitor' || submittingAction}
+                                      title="Approve CNIC"
                                     >
-                                      <Eye size={12} /> {i + 1}
+                                      <Check size={12} />
                                     </button>
-                                  </div>
-                                ))
-                              ) : (
-                                <button
-                                  onClick={() => docUrl && setLightbox({ isOpen: true, url: docUrl, title: key.replace('_', ' '), docKey: key })}
-                                  className="admin-btn admin-btn-secondary"
-                                  style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px' }}
-                                  disabled={!docUrl}
-                                >
-                                  <Eye size={12} /> View
-                                </button>
-                              )}
 
-                              {/* Green Check (Approve) */}
-                              <button
-                                onClick={() => handleVerifyDoc(key, 'approved')}
-                                style={{
-                                  backgroundColor: docStatus === 'approved' ? 'var(--brand-green-soft)' : 'transparent',
-                                  border: '1px solid ' + (docStatus === 'approved' ? 'var(--brand-green-dark)' : 'var(--hairline)'),
-                                  color: docStatus === 'approved' ? 'var(--brand-green-dark)' : 'var(--steel)',
-                                  cursor: 'pointer',
-                                  padding: '4px 8px',
-                                  borderRadius: '4px',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center'
-                                }}
-                                disabled={adminRole === 'monitor' || submittingAction}
-                                title="Approve document"
-                              >
-                                <Check size={12} />
-                              </button>
-
-                              {/* Red Cross (Reject) */}
-                              <button
-                                onClick={() => handleRejectDoc(key)}
-                                style={{
-                                  backgroundColor: docStatus === 'rejected' ? '#FEE2E2' : 'transparent',
-                                  border: '1px solid ' + (docStatus === 'rejected' ? '#EF4444' : 'var(--hairline)'),
-                                  color: docStatus === 'rejected' ? '#EF4444' : 'var(--steel)',
-                                  cursor: 'pointer',
-                                  padding: '4px 8px',
-                                  borderRadius: '4px',
-                                  display: 'flex',
-                                  alignItems: 'center',
-                                  justifyContent: 'center'
-                                }}
-                                disabled={adminRole === 'monitor' || submittingAction}
-                                title="Reject document"
-                              >
-                                <X size={12} />
-                              </button>
+                                    <button
+                                      onClick={() => handleRejectDoc('cnic_front')}
+                                      style={{
+                                        backgroundColor: '#FEE2E2',
+                                        border: '1px solid #EF4444',
+                                        color: '#EF4444',
+                                        cursor: 'pointer',
+                                        padding: '4px 8px',
+                                        borderRadius: '4px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                      }}
+                                      disabled={adminRole === 'monitor' || submittingAction}
+                                      title="Reject CNIC"
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
                             </div>
+                            {cnicRejectionNotes.length > 0 && (
+                              <div style={{ fontSize: '11px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '6px 10px', borderRadius: '4px', border: '1px solid #FECACA' }}>
+                                <strong>Objection:</strong> {cnicRejectionNotes.join('; ')}
+                              </div>
+                            )}
                           </div>
-                          {docStatus === 'rejected' && vState?.reason && (
-                            <div style={{ fontSize: '11px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '6px 10px', borderRadius: '4px', border: '1px solid #FECACA' }}>
-                              <strong>Objection:</strong> {vState.reason}
+
+                          {/* 2. Degree Verification Card */}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-md)', backgroundColor: 'var(--surface-soft)' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <span style={{ fontSize: '13px', fontWeight: 600 }}>2. Degree / Credentials</span>
+                                {isDegreeApproved ? (
+                                  <span style={{ fontSize: '10px', color: 'var(--brand-green-dark)', backgroundColor: 'var(--brand-green-soft)', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>✓ VERIFIED</span>
+                                ) : degreeStatus === 'rejected' ? (
+                                  <span style={{ fontSize: '10px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>REJECTED</span>
+                                ) : hasDegree ? (
+                                  <span style={{ fontSize: '10px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>UNVERIFIED</span>
+                                ) : (
+                                  <span style={{ fontSize: '10px', color: 'var(--steel)', backgroundColor: 'var(--canvas)', padding: '2px 8px', borderRadius: '4px' }}>Not Uploaded</span>
+                                )}
+                              </div>
+
+                              <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                {hasDegree && (
+                                  <button
+                                    onClick={() => signedUrls['degree'] && setLightbox({ isOpen: true, url: signedUrls['degree'], title: 'Degree Certificate', docKey: 'degree' })}
+                                    className="admin-btn admin-btn-secondary"
+                                    style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px' }}
+                                    disabled={!signedUrls['degree']}
+                                  >
+                                    <Eye size={12} /> View
+                                  </button>
+                                )}
+
+                                {/* HIDE Check & Cross controls when already approved! */}
+                                {!isDegreeApproved && hasDegree && (
+                                  <>
+                                    <button
+                                      onClick={() => handleVerifyDoc('degree', 'approved')}
+                                      style={{
+                                        backgroundColor: 'transparent',
+                                        border: '1px solid var(--brand-green-dark)',
+                                        color: 'var(--brand-green-dark)',
+                                        cursor: 'pointer',
+                                        padding: '4px 8px',
+                                        borderRadius: '4px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                      }}
+                                      disabled={adminRole === 'monitor' || submittingAction}
+                                      title="Approve Degree"
+                                    >
+                                      <Check size={12} />
+                                    </button>
+
+                                    <button
+                                      onClick={() => handleRejectDoc('degree')}
+                                      style={{
+                                        backgroundColor: '#FEE2E2',
+                                        border: '1px solid #EF4444',
+                                        color: '#EF4444',
+                                        cursor: 'pointer',
+                                        padding: '4px 8px',
+                                        borderRadius: '4px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'center'
+                                      }}
+                                      disabled={adminRole === 'monitor' || submittingAction}
+                                      title="Reject Degree"
+                                    >
+                                      <X size={12} />
+                                    </button>
+                                  </>
+                                )}
+                              </div>
                             </div>
-                          )}
-                        </div>
+                            {degreeStatus === 'rejected' && verif.degree?.reason && (
+                              <div style={{ fontSize: '11px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '6px 10px', borderRadius: '4px', border: '1px solid #FECACA' }}>
+                                <strong>Objection:</strong> {verif.degree.reason}
+                              </div>
+                            )}
+                          </div>
+                        </>
                       );
-                    })}
+                    })()}
                   </div>
                 )}
               </div>
@@ -1291,6 +1412,40 @@ export default function KYCReview() {
             
             <div style={{ color: 'var(--ink)', marginBottom: '16px', display: 'flex', justifyItems: 'center', alignItems: 'center', gap: '16px', zIndex: 1050 }}>
               <span style={{ fontSize: '18px', fontWeight: 600 }}>{lightbox.title}</span>
+              {lightbox.urls && lightbox.urls.length > 1 && (
+                <div style={{ display: 'flex', gap: '8px', marginLeft: '12px' }}>
+                  <button
+                    onClick={() => setLightbox(prev => ({ ...prev, url: lightbox.urls[0], activeUrlIndex: 0, docKey: 'cnic_front', title: 'CNIC Front Image' }))}
+                    style={{
+                      padding: '4px 12px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      borderRadius: '6px',
+                      border: (lightbox.activeUrlIndex === 0 || !lightbox.activeUrlIndex) ? '2px solid var(--brand-green)' : '1px solid var(--hairline)',
+                      backgroundColor: (lightbox.activeUrlIndex === 0 || !lightbox.activeUrlIndex) ? 'var(--brand-green-soft)' : 'var(--canvas)',
+                      color: (lightbox.activeUrlIndex === 0 || !lightbox.activeUrlIndex) ? 'var(--brand-green-dark)' : 'var(--ink)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    🪪 CNIC Front
+                  </button>
+                  <button
+                    onClick={() => setLightbox(prev => ({ ...prev, url: lightbox.urls[1], activeUrlIndex: 1, docKey: 'cnic_back', title: 'CNIC Back Image' }))}
+                    style={{
+                      padding: '4px 12px',
+                      fontSize: '12px',
+                      fontWeight: 600,
+                      borderRadius: '6px',
+                      border: lightbox.activeUrlIndex === 1 ? '2px solid var(--brand-green)' : '1px solid var(--hairline)',
+                      backgroundColor: lightbox.activeUrlIndex === 1 ? 'var(--brand-green-soft)' : 'var(--canvas)',
+                      color: lightbox.activeUrlIndex === 1 ? 'var(--brand-green-dark)' : 'var(--ink)',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    🪪 CNIC Back
+                  </button>
+                </div>
+              )}
               <span className="admin-badge admin-badge-grey">
                 {annMode ? 'Click on Document to Pin Correction Note' : 'Drag to Pan • Scroll/Controls to Zoom'}
               </span>
