@@ -1267,6 +1267,94 @@ export default function KYCReview() {
                               </div>
                             )}
                           </div>
+
+                          {/* 3. Certificates Verification Card */}
+                          {(() => {
+                            const hasCertificates = !!docs.certificates && (Array.isArray(docs.certificates) ? docs.certificates.length > 0 : !!docs.certificates);
+                            const certsStatus = verif.certificates?.status || (hasCertificates ? 'pending' : 'not_submitted');
+                            const isCertsApproved = certsStatus === 'approved';
+                            const certsCount = Array.isArray(docs.certificates) ? docs.certificates.length : docs.certificates ? 1 : 0;
+                            const rawUrls = signedUrls['certificates'];
+                            const certsUrls = Array.isArray(rawUrls) ? rawUrls : rawUrls ? [rawUrls] : [];
+
+                            return (
+                              <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '12px', border: '1px solid var(--hairline)', borderRadius: 'var(--rounded-md)', backgroundColor: 'var(--surface-soft)' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                    <span style={{ fontSize: '13px', fontWeight: 600 }}>3. Certificates</span>
+                                    {isCertsApproved ? (
+                                      <span style={{ fontSize: '10px', color: 'var(--brand-green-dark)', backgroundColor: 'var(--brand-green-soft)', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>✓ VERIFIED</span>
+                                    ) : certsStatus === 'rejected' ? (
+                                      <span style={{ fontSize: '10px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>REJECTED</span>
+                                    ) : hasCertificates ? (
+                                      <span style={{ fontSize: '10px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>UNVERIFIED</span>
+                                    ) : (
+                                      <span style={{ fontSize: '10px', color: 'var(--steel)', backgroundColor: 'var(--canvas)', padding: '2px 8px', borderRadius: '4px' }}>Not Uploaded</span>
+                                    )}
+                                  </div>
+
+                                  <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                    {hasCertificates && certsUrls.length > 0 && (
+                                      <button
+                                        onClick={() => setLightbox({ isOpen: true, url: certsUrls[0], urls: certsUrls, activeUrlIndex: 0, title: 'Certificates Document', docKey: 'certificates' })}
+                                        className="admin-btn admin-btn-secondary"
+                                        style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px' }}
+                                      >
+                                        <Eye size={12} /> View {certsCount > 1 ? `(${certsCount})` : ''}
+                                      </button>
+                                    )}
+
+                                    {!isCertsApproved && hasCertificates && (
+                                      <>
+                                        <button
+                                          onClick={() => handleVerifyDoc('certificates', 'approved')}
+                                          style={{
+                                            backgroundColor: 'transparent',
+                                            border: '1px solid var(--brand-green-dark)',
+                                            color: 'var(--brand-green-dark)',
+                                            cursor: 'pointer',
+                                            padding: '4px 8px',
+                                            borderRadius: '4px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center'
+                                          }}
+                                          disabled={adminRole === 'monitor' || submittingAction}
+                                          title="Approve Certificates"
+                                        >
+                                          <Check size={12} />
+                                        </button>
+
+                                        <button
+                                          onClick={() => handleRejectDoc('certificates')}
+                                          style={{
+                                            backgroundColor: '#FEE2E2',
+                                            border: '1px solid #EF4444',
+                                            color: '#EF4444',
+                                            cursor: 'pointer',
+                                            padding: '4px 8px',
+                                            borderRadius: '4px',
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            justifyContent: 'center'
+                                          }}
+                                          disabled={adminRole === 'monitor' || submittingAction}
+                                          title="Reject Certificates"
+                                        >
+                                          <X size={12} />
+                                        </button>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                                {certsStatus === 'rejected' && verif.certificates?.reason && (
+                                  <div style={{ fontSize: '11px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '6px 10px', borderRadius: '4px', border: '1px solid #FECACA' }}>
+                                    <strong>Objection:</strong> {verif.certificates.reason}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </>
                       );
                     })()}
