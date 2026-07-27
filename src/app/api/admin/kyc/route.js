@@ -74,6 +74,7 @@ export async function POST(request) {
         .from('tutor_profiles')
         .update({ 
           kyc_status: 'approved',
+          verified: true,
           kyc_objections: null
         })
         .eq('id', tutorId);
@@ -100,6 +101,7 @@ export async function POST(request) {
         .from('tutor_profiles')
         .update({ 
           kyc_status: 'rejected',
+          verified: false,
           kyc_objections: objections
         })
         .eq('id', tutorId);
@@ -132,9 +134,20 @@ export async function POST(request) {
       }
     } else if (action === 'UPDATE_VERIFICATION') {
       const { kyc_verifications } = payload;
+      const cnicFrontOk = kyc_verifications?.cnic_front?.status === 'approved';
+      const cnicBackOk = kyc_verifications?.cnic_back?.status === 'approved';
+      const degreeOk = kyc_verifications?.degree?.status === 'approved';
+
+      const updateData = { kyc_verifications };
+      if (cnicFrontOk && cnicBackOk && degreeOk) {
+        updateData.kyc_status = 'approved';
+        updateData.verified = true;
+        updateData.kyc_objections = null;
+      }
+
       dbResult = await supabaseAdmin
         .from('tutor_profiles')
-        .update({ kyc_verifications })
+        .update(updateData)
         .eq('id', tutorId);
 
       if (dbResult.error) throw dbResult.error;

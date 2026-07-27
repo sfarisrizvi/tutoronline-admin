@@ -415,8 +415,8 @@ export default function KYCReview() {
           if (!res.ok) throw new Error(data.error?.message || 'Failed to approve KYC');
 
           // Update state
-          setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_status: 'approved', kyc_objections: {} } : t));
-          setSelectedTutor(prev => ({ ...prev, kyc_status: 'approved', kyc_objections: {} }));
+          setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_status: 'approved', verified: true, kyc_objections: {} } : t));
+          setSelectedTutor(prev => ({ ...prev, kyc_status: 'approved', verified: true, kyc_objections: {} }));
           showToast('Tutor KYC approved successfully.');
         } catch (err) {
           showToast(err.message, 'error');
