@@ -1110,7 +1110,7 @@ export default function KYCReview() {
                                 ) : cnicStatus === 'rejected' ? (
                                   <span style={{ fontSize: '10px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>REJECTED</span>
                                 ) : hasCnic ? (
-                                  <span style={{ fontSize: '10px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>UNVERIFIED</span>
+                                  <span style={{ fontSize: '10px', color: '#F59E0B', backgroundColor: 'rgba(245, 158, 11, 0.14)', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>UNVERIFIED</span>
                                 ) : (
                                   <span style={{ fontSize: '10px', color: 'var(--steel)', backgroundColor: 'var(--canvas)', padding: '2px 8px', borderRadius: '4px' }}>Not Uploaded</span>
                                 )}
@@ -1287,7 +1287,7 @@ export default function KYCReview() {
                                     ) : certsStatus === 'rejected' ? (
                                       <span style={{ fontSize: '10px', color: '#991B1B', backgroundColor: '#FEE2E2', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>REJECTED</span>
                                     ) : hasCertificates ? (
-                                      <span style={{ fontSize: '10px', color: '#92400E', backgroundColor: '#FEF3C7', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>UNVERIFIED</span>
+                                      <span style={{ fontSize: '10px', color: '#F59E0B', backgroundColor: 'rgba(245, 158, 11, 0.14)', padding: '2px 8px', borderRadius: '4px', fontWeight: 700 }}>UNVERIFIED</span>
                                     ) : (
                                       <span style={{ fontSize: '10px', color: 'var(--steel)', backgroundColor: 'var(--canvas)', padding: '2px 8px', borderRadius: '4px' }}>Not Uploaded</span>
                                     )}
