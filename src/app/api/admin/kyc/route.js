@@ -54,15 +54,16 @@ export async function POST(request) {
         return respondWithError({ status: 401, message: 'Unauthorized session', traceId });
       }
       
-      // Verify user is an admin
-      const { data: roleData, error: roleError } = await supabaseAdmin
+      // Verify user is an admin via user_roles table or user_metadata
+      const { data: roleData } = await supabaseAdmin
         .from('user_roles')
         .select('role')
         .eq('user_id', user.id)
-        .single();
-        
-      if (roleError || !roleData || roleData.role !== 'admin') {
-         return respondWithError({ status: 403, message: 'Forbidden: Requires admin role', traceId });
+        .maybeSingle();
+
+      const isAdmin = roleData?.role === 'admin' || user?.user_metadata?.role === 'admin';
+      if (!isAdmin) {
+        return respondWithError({ status: 403, message: 'Forbidden: Requires admin role to verify KYC', traceId });
       }
     }
 

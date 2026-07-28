@@ -300,7 +300,10 @@ export default function KYCReview() {
         })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || 'Failed to update document verification status');
+      if (!res.ok) {
+        const errMsg = (typeof data.error === 'string' ? data.error : data.error?.message) || data.message || 'Failed to update document verification status';
+        throw new Error(errMsg);
+      }
 
       setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_verifications: newVerifications } : t));
       setSelectedTutor(prev => ({ ...prev, kyc_verifications: newVerifications }));
@@ -412,7 +415,10 @@ export default function KYCReview() {
             })
           });
           const data = await res.json();
-          if (!res.ok) throw new Error(data.error?.message || 'Failed to approve KYC');
+          if (!res.ok) {
+            const errMsg = (typeof data.error === 'string' ? data.error : data.error?.message) || data.message || 'Failed to approve KYC';
+            throw new Error(errMsg);
+          }
 
           // Update state
           setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_status: 'approved', verified: true, kyc_objections: {} } : t));
@@ -457,7 +463,10 @@ export default function KYCReview() {
         })
       });
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error?.message || 'Failed to reject KYC');
+      if (!res.ok) {
+        const errMsg = (typeof data.error === 'string' ? data.error : data.error?.message) || data.message || 'Failed to reject KYC';
+        throw new Error(errMsg);
+      }
 
       // Update state
       setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_status: 'rejected', verified: false, kyc_objections: objectionsData } : t));
