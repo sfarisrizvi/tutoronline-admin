@@ -141,97 +141,44 @@ export default function AdminLogsPage() {
   const orangeCount = logs.filter(l => l.status_color === 'orange').length;
 
   return (
-    <div className="container" style={{ paddingBottom: '60px' }}>
+    <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       
       {/* Header Band */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--spacing-lg)', flexWrap: 'wrap', gap: '16px' }}>
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <div style={{ backgroundColor: 'var(--surface-soft)', padding: '10px', borderRadius: '10px', color: '#38BDF8', border: '1px solid var(--hairline-strong)' }}>
-              <Terminal size={22} />
-            </div>
-            <div>
-              <h2 style={{ margin: 0, fontSize: '26px', fontWeight: 700 }}>Admin Log Book</h2>
-              <p style={{ margin: '2px 0 0 0', color: 'var(--steel)', fontSize: '13px' }}>
-                System audit log stream for all administrative actions, KYC decisions, badges, and suspensions.
-              </p>
-            </div>
+      <div className="admin-header-band">
+        <div className="container" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%', maxWidth: '100%', flexWrap: 'wrap', gap: '16px' }}>
+          <div>
+            <h1>Log Book</h1>
+            <p>System audit log stream for all administrative actions, KYC decisions, badges, and suspensions.</p>
           </div>
-        </div>
 
-        <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
-          <button
-            onClick={handleCopyLogs}
-            className="admin-btn admin-btn-secondary"
-            style={{ fontSize: '12px', padding: '8px 14px' }}
-          >
-            {copied ? <Check size={14} color="#00ED64" /> : <Copy size={14} />}
-            {copied ? 'Copied!' : 'Copy Logs'}
-          </button>
+          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <button
+              onClick={handleCopyLogs}
+              className="admin-btn admin-btn-secondary"
+            >
+              {copied ? <Check size={14} color="#00ED64" /> : <Copy size={14} />}
+              {copied ? 'Copied!' : 'Copy Logs'}
+            </button>
 
-          <button
-            onClick={handleExportTxt}
-            className="admin-btn admin-btn-secondary"
-            style={{ fontSize: '12px', padding: '8px 14px' }}
-          >
-            <Download size={14} /> Export Log File
-          </button>
+            <button
+              onClick={handleExportTxt}
+              className="admin-btn admin-btn-secondary"
+            >
+              <Download size={14} /> Export Log File
+            </button>
 
-          <button
-            onClick={fetchLogs}
-            disabled={loading}
-            className="admin-btn admin-btn-primary"
-            style={{ fontSize: '12px', padding: '8px 16px' }}
-          >
-            <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh Stream
-          </button>
+            <button
+              onClick={fetchLogs}
+              disabled={loading}
+              className="admin-btn admin-btn-primary"
+            >
+              <RefreshCw size={14} className={loading ? 'spin' : ''} /> Refresh Stream
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Overview Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 'var(--spacing-md)', marginBottom: 'var(--spacing-lg)' }}>
-        
-        <div className="admin-card" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ backgroundColor: 'var(--surface-soft)', padding: '10px', borderRadius: '8px', color: '#38BDF8' }}>
-            <Activity size={20} />
-          </div>
-          <div>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', textTransform: 'uppercase' }}>Total Audit Logs</span>
-            <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 700 }}>{logs.length}</h3>
-          </div>
-        </div>
-
-        <div className="admin-card" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ backgroundColor: 'var(--brand-green-soft)', padding: '10px', borderRadius: '8px', color: '#00ED64' }}>
-            <UserCheck size={20} />
-          </div>
-          <div>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', textTransform: 'uppercase' }}>Approvals / Badges</span>
-            <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#00ED64' }}>{greenCount}</h3>
-          </div>
-        </div>
-
-        <div className="admin-card" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ backgroundColor: '#2D1415', padding: '10px', borderRadius: '8px', color: '#FF5252' }}>
-            <Ban size={20} />
-          </div>
-          <div>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', textTransform: 'uppercase' }}>Suspensions / Deletions</span>
-            <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#FF5252' }}>{redCount}</h3>
-          </div>
-        </div>
-
-        <div className="admin-card" style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '14px' }}>
-          <div style={{ backgroundColor: '#2F1B10', padding: '10px', borderRadius: '8px', color: '#FFB300' }}>
-            <AlertCircle size={20} />
-          </div>
-          <div>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: 'var(--steel)', textTransform: 'uppercase' }}>Rejections / Warnings</span>
-            <h3 style={{ margin: 0, fontSize: '20px', fontWeight: 700, color: '#FFB300' }}>{orangeCount}</h3>
-          </div>
-        </div>
-
-      </div>
+      <div className="container" style={{ paddingBottom: 'var(--spacing-xl)', flex: 1, width: '100%', maxWidth: '100%' }}>
 
       {/* Control Bar: Search & Filter Tabs */}
       <div className="admin-card" style={{ marginBottom: 'var(--spacing-md)', padding: '14px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '14px' }}>
@@ -459,6 +406,7 @@ export default function AdminLogsPage() {
 
       </div>
 
+      </div>
     </div>
   );
 }
