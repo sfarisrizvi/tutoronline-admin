@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '../../utils/supabase/client';
+import { logAdminAction } from '../../utils/logHelper';
 import { 
   Search, 
   ExternalLink, 
@@ -530,6 +531,15 @@ export default function KYCReview() {
           // Update state
           setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_status: 'approved', verified: true, kyc_objections: {} } : t));
           setSelectedTutor(prev => ({ ...prev, kyc_status: 'approved', verified: true, kyc_objections: {} }));
+          logAdminAction({
+            adminUser,
+            actionType: 'approved_kyc',
+            actionLabel: 'approved kyc',
+            statusColor: 'green',
+            targetUserName: selectedTutor.full_name || 'Tutor',
+            targetUserEmail: selectedTutor.email || '',
+            details: 'All identity and degree verification documents validated.'
+          });
           showToast('Tutor KYC approved successfully.');
         } catch (err) {
           showToast(err.message, 'error');

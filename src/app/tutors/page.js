@@ -2,6 +2,7 @@
 import React, { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { createClient } from '../../utils/supabase/client';
+import { logAdminAction } from '../../utils/logHelper';
 import { 
   Search, 
   ExternalLink, 
@@ -492,6 +493,14 @@ export default function AdminTutors() {
           // Update state
           setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, suspended: nextSuspendedState } : t));
           setSelectedTutor(prev => ({ ...prev, suspended: nextSuspendedState }));
+          logAdminAction({
+            adminUser,
+            actionType: nextSuspendedState ? 'suspended' : 'activated',
+            actionLabel: nextSuspendedState ? 'suspended account' : 'activated account',
+            statusColor: nextSuspendedState ? 'red' : 'green',
+            targetUserName: selectedTutor.full_name || 'Tutor',
+            targetUserEmail: selectedTutor.email || ''
+          });
           showToast(`Account successfully ${nextSuspendedState ? 'suspended' : 'unsuspended'}.`);
         } catch (err) {
           showToast(err.message, 'error');
@@ -542,6 +551,14 @@ export default function AdminTutors() {
           // Update state
           setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, verified: nextVerifiedState, kyc_verifications: updatedVerifications } : t));
           setSelectedTutor(prev => ({ ...prev, verified: nextVerifiedState, kyc_verifications: updatedVerifications }));
+          logAdminAction({
+            adminUser,
+            actionType: nextVerifiedState ? 'given_verified_badge' : 'revoked_badge',
+            actionLabel: nextVerifiedState ? 'given verified badge' : 'revoked verified badge',
+            statusColor: nextVerifiedState ? 'green' : 'orange',
+            targetUserName: selectedTutor.full_name || 'Tutor',
+            targetUserEmail: selectedTutor.email || ''
+          });
           showToast(`Verified badge ${nextVerifiedState ? 'granted' : 'removed'} successfully.`);
         } catch (err) {
           showToast(err.message, 'error');
