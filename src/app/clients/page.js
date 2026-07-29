@@ -18,7 +18,11 @@ import {
   ChevronUp,
   User,
   GraduationCap,
-  School
+  School,
+  CheckSquare,
+  Square,
+  Ban,
+  X
 } from 'lucide-react';
 
 export default function ClientsDirectory() {
@@ -39,6 +43,91 @@ export default function ClientsDirectory() {
   // Selected Client details drawer
   const [selectedClient, setSelectedClient] = useState(null);
   const [submittingAction, setSubmittingAction] = useState(false);
+
+  // Multi-Selection State
+  const [selectedIds, setSelectedIds] = useState(new Set());
+
+  const isAllSelected = clients.length > 0 && clients.every(c => selectedIds.has(c.id));
+
+  const handleSelectAll = () => {
+    if (isAllSelected) {
+      const newSel = new Set(selectedIds);
+      clients.forEach(c => newSel.delete(c.id));
+      setSelectedIds(newSel);
+    } else {
+      const newSel = new Set(selectedIds);
+      clients.forEach(c => newSel.add(c.id));
+      setSelectedIds(newSel);
+    }
+  };
+
+  const handleToggleSelect = (id, e) => {
+    if (e) e.stopPropagation();
+    const newSel = new Set(selectedIds);
+    if (newSel.has(id)) {
+      newSel.delete(id);
+    } else {
+      newSel.add(id);
+    }
+    setSelectedIds(newSel);
+  };
+
+  const handleClearSelection = () => {
+    setSelectedIds(new Set());
+  };
+
+  // Batch Suspend / Unsuspend
+  const handleBatchSuspension = async (suspendValue) => {
+    const idsToProcess = Array.from(selectedIds);
+    if (idsToProcess.length === 0) return;
+
+    setSubmittingAction(true);
+    const supabase = createClient();
+    try {
+      const { error } = await supabase
+        .from('client_profiles')
+        .update({ suspended: suspendValue })
+        .in('id', idsToProcess);
+
+      if (error) throw error;
+
+      setClients(prev => prev.map(c => selectedIds.has(c.id) ? { ...c, suspended: suspendValue } : c));
+      handleClearSelection();
+    } catch (err) {
+      console.error('Batch client suspension error:', err);
+    } finally {
+      setSubmittingAction(false);
+    }
+  };
+
+  // Batch Delete
+  const handleBatchDelete = async () => {
+    const idsToProcess = Array.from(selectedIds);
+    if (idsToProcess.length === 0) return;
+
+    if (!confirm(`Are you sure you want to delete ${idsToProcess.length} selected client profile(s)?`)) return;
+
+    setSubmittingAction(true);
+    try {
+      for (const clientId of idsToProcess) {
+        try {
+          await fetch(`/api/admins?id=${clientId}`, { method: 'DELETE' });
+        } catch (aErr) {
+          console.warn(`API delete warning for client ${clientId}:`, aErr);
+        }
+      }
+
+      const supabase = createClient();
+      await supabase.from('client_profiles').delete().in('id', idsToProcess);
+
+      setClients(prev => prev.filter(c => !selectedIds.has(c.id)));
+      handleClearSelection();
+    } catch (err) {
+      console.error('Batch client delete error:', err);
+    } finally {
+      setSubmittingAction(false);
+    }
+  };
 
   // Parent Children state
   const [childrenList, setChildrenList] = useState([]);
@@ -115,16 +204,21 @@ export default function ClientsDirectory() {
 
   useEffect(() => {
     const checkAuth = async () => {
-      const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
+      try {
+        const supabase = createClient();
+        const { data, error } = await supabase.auth.getUser();
+        const user = data?.user;
 
-      if (!user || user.user_metadata?.role !== 'admin') {
-        router.push('/login');
-        return;
+        if (error || !user || user.user_metadata?.role !== 'admin') {
+          router.push('/login');
+          return;
+        }
+        setAdminUser(user);
+        setAdminRole(user.user_metadata?.admin_role || 'super_admin');
+        fetchMetrics();
+      } catch (err) {
+        console.error('CheckAuth error:', err);
       }
-      setAdminUser(user);
-      setAdminRole(user.user_metadata?.admin_role || 'super_admin');
-      fetchMetrics();
     };
     checkAuth();
   }, [router]);
@@ -318,18 +412,75 @@ export default function ClientsDirectory() {
           </div>
         </div>
 
-        {/* Search Bar */}
-        <div className="admin-card" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--spacing-md)', padding: '12px 16px' }}>
-          <Search size={18} style={{ color: 'var(--steel)' }} />
-          <input
-            type="text"
-            className="admin-input"
-            style={{ border: 'none', background: 'transparent', color: 'var(--ink)', width: '100%', height: 'auto', padding: 0 }}
-            placeholder="Search clients by name, email or number..."
-            value={searchQuery}
-            onChange={(e) => handleSearchChange(e.target.value)}
-          />
+        {/* Search & Select Toolbar */}
+        <div className="admin-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: 'var(--spacing-md)', padding: '12px 16px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: '220px' }}>
+            <Search size={18} style={{ color: 'var(--steel)' }} />
+            <input
+              type="text"
+              className="admin-input"
+              style={{ border: 'none', background: 'transparent', color: 'var(--ink)', width: '100%', height: 'auto', padding: 0 }}
+              placeholder="Search clients by name, email or number..."
+              value={searchQuery}
+              onChange={(e) => handleSearchChange(e.target.value)}
+            />
+          </div>
+
+          {clients.length > 0 && (
+            <button
+              onClick={handleSelectAll}
+              className="admin-select-all-btn"
+            >
+              {isAllSelected ? <CheckSquare size={16} /> : <Square size={16} />}
+              {isAllSelected ? 'Deselect All' : `Select All (${clients.length})`}
+            </button>
+          )}
         </div>
+
+        {/* Dynamic Action Bar Overlay */}
+        {selectedIds.size > 0 && (
+          <div className="admin-bulk-bar">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span className="admin-bulk-badge">
+                {selectedIds.size}
+              </span>
+              <span style={{ fontWeight: 600, fontSize: '14px', color: 'var(--ink)' }}>Clients Selected</span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => handleBatchSuspension(true)}
+                disabled={submittingAction}
+                className="admin-bulk-btn-suspend"
+              >
+                <Ban size={14} /> Suspend Selected
+              </button>
+              <button
+                onClick={() => handleBatchSuspension(false)}
+                disabled={submittingAction}
+                className="admin-bulk-btn-activate"
+              >
+                <UserCheck size={14} /> Activate Selected
+              </button>
+              {adminRole === 'super_admin' && (
+                <button
+                  onClick={handleBatchDelete}
+                  disabled={submittingAction}
+                  className="admin-bulk-btn-danger"
+                >
+                  <Trash2 size={14} /> Delete Selected
+                </button>
+              )}
+              <button
+                onClick={handleClearSelection}
+                disabled={submittingAction}
+                className="admin-bulk-btn-ghost"
+              >
+                <X size={14} /> Deselect
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Clients list table */}
         <div className="admin-table-container">
@@ -341,7 +492,12 @@ export default function ClientsDirectory() {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th style={{ width: '60px' }}>S.#</th>
+                  <th style={{ width: '40px' }}>
+                    <button onClick={handleSelectAll} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}>
+                      {isAllSelected ? <CheckSquare size={18} color="#10B981" /> : <Square size={18} color="#94A3B8" />}
+                    </button>
+                  </th>
+                  <th style={{ width: '50px' }}>S.#</th>
                   <th>Client Name</th>
                   <th>Contact Information</th>
                   <th>City / Type</th>
@@ -349,13 +505,20 @@ export default function ClientsDirectory() {
                 </tr>
               </thead>
               <tbody>
-                {clients.map((client, idx) => (
-                  <tr 
-                    key={client.id}
-                    onClick={() => { setSelectedClient(client); setChildrenList([]); setOpenChildIndices({}); }}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td>{(page - 1) * pageSize + idx + 1}</td>
+                {clients.map((client, idx) => {
+                  const isSelected = selectedIds.has(client.id);
+                  return (
+                    <tr 
+                      key={client.id}
+                      onClick={() => { setSelectedClient(client); setChildrenList([]); setOpenChildIndices({}); }}
+                      style={{ cursor: 'pointer', backgroundColor: isSelected ? 'var(--brand-green-soft, #ECFDF5)' : 'transparent' }}
+                    >
+                      <td onClick={(e) => handleToggleSelect(client.id, e)}>
+                        <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}>
+                          {isSelected ? <CheckSquare size={18} color="#10B981" /> : <Square size={18} color="#94A3B8" />}
+                        </button>
+                      </td>
+                      <td>{(page - 1) * pageSize + idx + 1}</td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         {client.avatar_url ? (
@@ -398,7 +561,8 @@ export default function ClientsDirectory() {
                       )}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           )}

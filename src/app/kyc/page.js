@@ -19,7 +19,10 @@ import {
   ZoomIn,
   ZoomOut,
   Maximize2,
-  Trash2
+  Trash2,
+  CheckSquare,
+  Square,
+  Ban
 } from 'lucide-react';
 
 export default function KYCReview() {
@@ -53,6 +56,105 @@ export default function KYCReview() {
   const [selectedObjectionDocs, setSelectedObjectionDocs] = useState([]);
   const [objectionComment, setObjectionComment] = useState('');
   const [submittingAction, setSubmittingAction] = useState(false);
+
+  // Multi-Selection State
+  const [selectedIds, setSelectedIds] = useState(new Set());
+
+  const isAllSelected = tutors.length > 0 && tutors.every(t => selectedIds.has(t.id));
+
+  const handleSelectAll = () => {
+    if (isAllSelected) {
+      const newSel = new Set(selectedIds);
+      tutors.forEach(t => newSel.delete(t.id));
+      setSelectedIds(newSel);
+    } else {
+      const newSel = new Set(selectedIds);
+      tutors.forEach(t => newSel.add(t.id));
+      setSelectedIds(newSel);
+    }
+  };
+
+  const handleToggleSelect = (id, e) => {
+    if (e) e.stopPropagation();
+    const newSel = new Set(selectedIds);
+    if (newSel.has(id)) {
+      newSel.delete(id);
+    } else {
+      newSel.add(id);
+    }
+    setSelectedIds(newSel);
+  };
+
+  const handleClearSelection = () => {
+    setSelectedIds(new Set());
+  };
+
+  // Batch KYC Action (approve / reject / suspend / activate)
+  const handleBatchKycAction = async (action) => {
+    const idsToProcess = Array.from(selectedIds);
+    if (idsToProcess.length === 0) return;
+
+    setSubmittingAction(true);
+    const supabase = createClient();
+    try {
+      if (action === 'approve') {
+        await supabase.from('tutor_profiles').update({ kyc_status: 'approved', verified: true }).in('id', idsToProcess);
+        setTutors(prev => prev.map(t => selectedIds.has(t.id) ? { ...t, kyc_status: 'approved', verified: true } : t));
+      } else if (action === 'reject') {
+        await supabase.from('tutor_profiles').update({ kyc_status: 'rejected', verified: false }).in('id', idsToProcess);
+        setTutors(prev => prev.map(t => selectedIds.has(t.id) ? { ...t, kyc_status: 'rejected', verified: false } : t));
+      } else if (action === 'suspend') {
+        await supabase.from('tutor_profiles').update({ suspended: true }).in('id', idsToProcess);
+        setTutors(prev => prev.map(t => selectedIds.has(t.id) ? { ...t, suspended: true } : t));
+      } else if (action === 'activate') {
+        await supabase.from('tutor_profiles').update({ suspended: false }).in('id', idsToProcess);
+        setTutors(prev => prev.map(t => selectedIds.has(t.id) ? { ...t, suspended: false } : t));
+      }
+      showToast(`Action '${action}' applied to ${idsToProcess.length} profile(s).`);
+      handleClearSelection();
+    } catch (err) {
+      console.error('Batch KYC action error:', err);
+      showToast('Failed to apply batch action', 'error');
+    } finally {
+      setSubmittingAction(false);
+    }
+  };
+
+  // Batch Delete
+  const handleBatchKycDelete = async () => {
+    const idsToProcess = Array.from(selectedIds);
+    if (idsToProcess.length === 0) return;
+
+    requestConsent(
+      'PERMANENT BATCH DELETION',
+      `CRITICAL ACTION: Are you sure you want to permanently delete ${idsToProcess.length} tutor profile(s)? All documents, profiles, and data will be deleted forever. This cannot be undone.`,
+      async () => {
+        setSubmittingAction(true);
+        try {
+          for (const tutorId of idsToProcess) {
+            try {
+              await fetch(`/api/admins?id=${tutorId}`, { method: 'DELETE' });
+            } catch (aErr) {
+              console.warn(`API delete warning for ${tutorId}:`, aErr);
+            }
+          }
+
+          const supabase = createClient();
+          await supabase.from('tutor_profiles').delete().in('id', idsToProcess);
+
+          setTutors(prev => prev.filter(t => !selectedIds.has(t.id)));
+          showToast(`${idsToProcess.length} tutor profile(s) deleted permanently.`);
+          handleClearSelection();
+        } catch (err) {
+          console.error('Batch delete error:', err);
+          showToast(err.message || 'Error deleting tutor profiles', 'error');
+        } finally {
+          setSubmittingAction(false);
+        }
+      },
+      true
+    );
+  };
 
   // Custom Toast State
   const [toast, setToast] = useState({ show: false, message: '', type: 'success' });
@@ -158,15 +260,20 @@ export default function KYCReview() {
   // Unified authentication check
   useEffect(() => {
     const checkAuth = async () => {
-      const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
+      try {
+        const supabase = createClient();
+        const { data, error } = await supabase.auth.getUser();
+        const user = data?.user;
 
-      if (!user || user.user_metadata?.role !== 'admin') {
-        router.push('/login');
-        return;
+        if (error || !user || user.user_metadata?.role !== 'admin') {
+          router.push('/login');
+          return;
+        }
+        setAdminUser(user);
+        setAdminRole(user.user_metadata?.admin_role || 'super_admin');
+      } catch (err) {
+        console.error('CheckAuth error:', err);
       }
-      setAdminUser(user);
-      setAdminRole(user.user_metadata?.admin_role || 'super_admin');
     };
     checkAuth();
   }, [router]);
@@ -686,18 +793,82 @@ export default function KYCReview() {
           </div>
         </div>
 
-        {/* Search Panel with transparent background input to fix contrast line issue */}
-        <div className="admin-card" style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: 'var(--spacing-md)', padding: '12px 16px' }}>
-          <Search size={18} style={{ color: 'var(--steel)' }} />
-          <input
-            type="text"
-            className="admin-input"
-            style={{ border: 'none', background: 'transparent', color: 'var(--ink)', width: '100%', height: 'auto', padding: 0 }}
-            placeholder="Search tutors by name, email or number..."
-            value={searchQuery}
-            onChange={handleSearchChange}
-          />
+        {/* Search & Select Toolbar */}
+        <div className="admin-card" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: 'var(--spacing-md)', padding: '12px 16px', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flex: 1, minWidth: '220px' }}>
+            <Search size={18} style={{ color: 'var(--steel)' }} />
+            <input
+              type="text"
+              className="admin-input"
+              style={{ border: 'none', background: 'transparent', color: 'var(--ink)', width: '100%', height: 'auto', padding: 0 }}
+              placeholder="Search tutors by name, email or number..."
+              value={searchQuery}
+              onChange={handleSearchChange}
+            />
+          </div>
+
+          {tutors.length > 0 && (
+            <button
+              onClick={handleSelectAll}
+              className="admin-select-all-btn"
+            >
+              {isAllSelected ? <CheckSquare size={16} /> : <Square size={16} />}
+              {isAllSelected ? 'Deselect All' : `Select All (${tutors.length})`}
+            </button>
+          )}
         </div>
+
+        {/* Dynamic Action Bar Overlay */}
+        {selectedIds.size > 0 && (
+          <div className="admin-bulk-bar">
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+              <span className="admin-bulk-badge">
+                {selectedIds.size}
+              </span>
+              <span style={{ fontWeight: 600, fontSize: '14px', color: 'var(--ink)' }}>Tutors Selected</span>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+              <button
+                onClick={() => handleBatchKycAction('approve')}
+                disabled={submittingAction}
+                className="admin-bulk-btn-activate"
+              >
+                <Check size={14} /> Approve Selected
+              </button>
+              <button
+                onClick={() => handleBatchKycAction('reject')}
+                disabled={submittingAction}
+                className="admin-bulk-btn-warning"
+              >
+                <X size={14} /> Reject Selected
+              </button>
+              <button
+                onClick={() => handleBatchKycAction('suspend')}
+                disabled={submittingAction}
+                className="admin-bulk-btn-suspend"
+              >
+                <Ban size={14} /> Suspend Selected
+              </button>
+              {adminRole === 'super_admin' && (
+                <button
+                  onClick={handleBatchKycDelete}
+                  disabled={submittingAction}
+                  className="admin-bulk-btn-danger"
+                >
+                  <Trash2 size={14} /> Delete Selected
+                </button>
+              )}
+              <button
+                onClick={handleClearSelection}
+                disabled={submittingAction}
+                className="admin-bulk-btn-ghost"
+              >
+                <X size={14} /> Deselect
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* KYC Queue Table */}
         <div className="admin-table-container">
@@ -709,7 +880,12 @@ export default function KYCReview() {
             <table className="admin-table">
               <thead>
                 <tr>
-                  <th style={{ width: '60px' }}>S.#</th>
+                  <th style={{ width: '40px' }}>
+                    <button onClick={handleSelectAll} style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}>
+                      {isAllSelected ? <CheckSquare size={18} color="#10B981" /> : <Square size={18} color="#94A3B8" />}
+                    </button>
+                  </th>
+                  <th style={{ width: '50px' }}>S.#</th>
                   <th>Tutor Info</th>
                   <th>City / Area</th>
                   <th 
@@ -740,13 +916,20 @@ export default function KYCReview() {
                 </tr>
               </thead>
               <tbody>
-                {filteredTutors.map((tutor, idx) => (
-                  <tr 
-                    key={tutor.id} 
-                    onClick={() => { setSelectedTutor(tutor); setSignedUrls({}); }}
-                    style={{ cursor: 'pointer' }}
-                  >
-                    <td>{(page - 1) * pageSize + idx + 1}</td>
+                {filteredTutors.map((tutor, idx) => {
+                  const isSelected = selectedIds.has(tutor.id);
+                  return (
+                    <tr 
+                      key={tutor.id} 
+                      onClick={() => { setSelectedTutor(tutor); setSignedUrls({}); }}
+                      style={{ cursor: 'pointer', backgroundColor: isSelected ? 'var(--brand-green-soft, #ECFDF5)' : 'transparent' }}
+                    >
+                      <td onClick={(e) => handleToggleSelect(tutor.id, e)}>
+                        <button style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, display: 'flex' }}>
+                          {isSelected ? <CheckSquare size={18} color="#10B981" /> : <Square size={18} color="#94A3B8" />}
+                        </button>
+                      </td>
+                      <td>{(page - 1) * pageSize + idx + 1}</td>
                     <td>
                       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
                         {tutor.avatar_url ? (
@@ -799,7 +982,8 @@ export default function KYCReview() {
                       )}
                     </td>
                   </tr>
-                ))}
+                );
+              })}
               </tbody>
             </table>
           )}
