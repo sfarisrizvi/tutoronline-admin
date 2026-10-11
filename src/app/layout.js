@@ -2,8 +2,8 @@ import "./globals.css";
 import AdminLayout from "../components/AdminLayout";
 
 export const metadata = {
-  title: "Tutor Online - Admin Control Center",
-  description: "Administrative console for Tutor Online platform",
+  title: "Admin Control Center - Tutor Online",
+  description: "Admin console for Tutor Online platform. NO GO AREA",
 };
 
 export default function RootLayout({ children }) {

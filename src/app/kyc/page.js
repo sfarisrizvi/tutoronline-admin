@@ -531,6 +531,14 @@ export default function KYCReview() {
           // Update state
           setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_status: 'approved', verified: true, kyc_objections: {} } : t));
           setSelectedTutor(prev => ({ ...prev, kyc_status: 'approved', verified: true, kyc_objections: {} }));
+
+          // Automatically award 500 bonus credits to tutor for completed & verified profile
+          try {
+            await supabase.rpc('award_tutor_verification_bonus', { p_tutor_id: selectedTutor.id });
+          } catch (bonusErr) {
+            console.error('Bonus award error (non-fatal):', bonusErr);
+          }
+
           logAdminAction({
             adminUser,
             actionType: 'approved_kyc',
@@ -540,7 +548,7 @@ export default function KYCReview() {
             targetUserEmail: selectedTutor.email || '',
             details: 'All identity and degree verification documents validated.'
           });
-          showToast('Tutor KYC approved successfully.');
+          showToast('Tutor KYC approved & 500 bonus credits awarded successfully.');
         } catch (err) {
           showToast(err.message, 'error');
         } finally {
