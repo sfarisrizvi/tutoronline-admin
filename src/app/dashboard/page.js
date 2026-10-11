@@ -127,7 +127,7 @@ export default function AdminDashboard() {
           <div className="admin-card" style={{ padding: 'var(--spacing-md)' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 'var(--spacing-sm)' }}>
               <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 600 }}>Recent Tutor Registrations</h3>
-              <Link href="/users" style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+              <Link href="/tutors" style={{ fontSize: '13px', display: 'flex', alignItems: 'center', gap: '4px' }}>
                 View All <ArrowRight size={14} />
               </Link>
             </div>

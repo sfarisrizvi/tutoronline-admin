@@ -11,8 +11,13 @@ import {
   Mail, 
   MapPin, 
   ShieldAlert,
-  RefreshCw
+  RefreshCw,
+  Forward,
+  Download,
+  FileText,
+  File
 } from 'lucide-react';
+import { parseChatMessage } from '../../utils/chatMessageParser';
 
 export default function AdminConversations() {
   const router = useRouter();
@@ -493,6 +498,7 @@ export default function AdminConversations() {
                         messages.map(msg => {
                           const isSelfAdmin = msg.sender_id === adminUser?.id;
                           const sender = usersLookup[msg.sender_id] || { name: 'Support Admin', role: 'admin' };
+                          const { cleanContent: mainText, isForwarded, fileAttachment } = parseChatMessage(msg.content, msg.media_url, msg.message_type);
 
                           return (
                             <div
@@ -507,11 +513,96 @@ export default function AdminConversations() {
                                 color: 'var(--charcoal)'
                               }}
                             >
-                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', fontSize: '10px', color: 'var(--steel)', marginBottom: '2px', fontWeight: 600 }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', gap: '16px', fontSize: '10px', color: 'var(--steel)', marginBottom: '4px', fontWeight: 600 }}>
                                 <span>{sender.name} ({sender.role})</span>
                                 <span>{new Date(msg.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
                               </div>
-                              <div style={{ fontSize: '13px', wordBreak: 'break-all' }}>{msg.content}</div>
+
+                              {/* Forwarded Tag */}
+                              {isForwarded && (
+                                <div style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  gap: '4px',
+                                  fontSize: '11px',
+                                  fontStyle: 'italic',
+                                  color: 'var(--steel)',
+                                  marginBottom: '6px'
+                                }}>
+                                  <Forward size={12} style={{ transform: 'scaleX(-1)' }} />
+                                  <span>Forwarded</span>
+                                </div>
+                              )}
+
+                              {/* File Attachment via API Gateway */}
+                              {fileAttachment && (
+                                fileAttachment.isImage ? (
+                                  <div style={{ borderRadius: '8px', overflow: 'hidden', border: '1px solid var(--hairline-strong)', maxWidth: '240px', marginBottom: mainText ? '6px' : '0' }}>
+                                    <img src={fileAttachment.url} alt={fileAttachment.name} style={{ width: '100%', height: 'auto', display: 'block' }} />
+                                  </div>
+                                ) : (
+                                  <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '10px',
+                                    padding: '8px 12px',
+                                    borderRadius: '8px',
+                                    backgroundColor: 'var(--surface-soft)',
+                                    border: '1px solid var(--hairline)',
+                                    marginBottom: mainText ? '6px' : '0',
+                                    minWidth: '200px'
+                                  }}>
+                                    <div style={{
+                                      width: '32px',
+                                      height: '32px',
+                                      borderRadius: '6px',
+                                      backgroundColor: fileAttachment.isPdf ? '#EF4444' : 'var(--brand-green)',
+                                      color: '#FFFFFF',
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'center',
+                                      fontWeight: 700,
+                                      fontSize: '10px',
+                                      flexShrink: 0
+                                    }}>
+                                      {fileAttachment.isPdf ? 'PDF' : <FileText size={16} />}
+                                    </div>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                      <div style={{ fontWeight: 600, fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--ink)' }}>
+                                        {fileAttachment.name}
+                                      </div>
+                                      <div style={{ fontSize: '10px', color: 'var(--steel)' }}>
+                                        {fileAttachment.isPdf ? 'PDF Document' : 'Attachment'}
+                                      </div>
+                                    </div>
+                                    <a
+                                      href={fileAttachment.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      download={fileAttachment.name}
+                                      style={{
+                                        display: 'inline-flex',
+                                        alignItems: 'center',
+                                        gap: '4px',
+                                        padding: '4px 8px',
+                                        borderRadius: '6px',
+                                        backgroundColor: 'var(--brand-green)',
+                                        color: '#FFFFFF',
+                                        textDecoration: 'none',
+                                        fontSize: '11px',
+                                        fontWeight: 600,
+                                        flexShrink: 0
+                                      }}
+                                    >
+                                      <Download size={12} /> View
+                                    </a>
+                                  </div>
+                                )
+                              )}
+
+                              {mainText && (
+                                <div style={{ fontSize: '13px', wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{mainText}</div>
+                              )}
                             </div>
                           );
                         })
