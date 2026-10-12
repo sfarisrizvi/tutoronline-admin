@@ -17,7 +17,8 @@ import {
   Menu,
   ShieldCheck,
   Terminal,
-  WalletCards
+  WalletCards,
+  Star
 } from 'lucide-react';
 
 export function AdminNav({ collapsed, setCollapsed }) {
@@ -49,6 +50,7 @@ export function AdminNav({ collapsed, setCollapsed }) {
     { name: 'Tutors', path: '/tutors', icon: BookOpen },
     { name: 'Clients', path: '/clients', icon: Users },
     { name: 'KYC Review', path: '/kyc', icon: FileCheck },
+    { name: 'Reviews', path: '/reviews', icon: Star },
     { name: 'Credit Requests', path: '/credits', icon: WalletCards },
     { name: 'Log Book', path: '/logs', icon: Terminal },
     { name: 'Chat Monitor', path: '/conversations', icon: MessageSquare },
