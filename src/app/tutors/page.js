@@ -209,27 +209,22 @@ export default function AdminTutors() {
   };
 
   const fetchMetrics = async () => {
-    const supabase = createClient();
     try {
-      const [
-        { count: total },
-        { count: pending },
-        { count: verified },
-        { count: suspended }
-      ] = await Promise.all([
+      const supabase = createClient();
+      const [totalRes, pendingRes, verifiedRes, suspendedRes] = await Promise.allSettled([
         supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }),
         supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('kyc_status', 'pending'),
         supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('verified', true),
         supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('suspended', true)
       ]);
       setMetrics({
-        total: total || 0,
-        pending: pending || 0,
-        verified: verified || 0,
-        suspended: suspended || 0
+        total: totalRes.status === 'fulfilled' ? (totalRes.value?.count || 0) : 0,
+        pending: pendingRes.status === 'fulfilled' ? (pendingRes.value?.count || 0) : 0,
+        verified: verifiedRes.status === 'fulfilled' ? (verifiedRes.value?.count || 0) : 0,
+        suspended: suspendedRes.status === 'fulfilled' ? (suspendedRes.value?.count || 0) : 0
       });
     } catch (err) {
-      console.error('Error fetching tutor metrics:', err);
+      console.warn('Error fetching tutor metrics:', err);
     }
   };
 
@@ -278,7 +273,7 @@ export default function AdminTutors() {
       } catch (err) {
         console.error(err);
       } finally {
-        if (active) setLoading(false);
+        setLoading(false);
       }
     };
     load();

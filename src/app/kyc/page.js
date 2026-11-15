@@ -23,12 +23,14 @@ import {
   Trash2,
   CheckSquare,
   Square,
-  Ban
+  Ban,
+  Loader2
 } from 'lucide-react';
 
 export default function KYCReview() {
   const router = useRouter();
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [tutors, setTutors] = useState([]);
   const [adminUser, setAdminUser] = useState(null);
   const [adminRole, setAdminRole] = useState('super_admin');
@@ -112,6 +114,7 @@ export default function KYCReview() {
         setTutors(prev => prev.map(t => selectedIds.has(t.id) ? { ...t, suspended: false } : t));
       }
       showToast(`Action '${action}' applied to ${idsToProcess.length} profile(s).`);
+      fetchMetrics();
       handleClearSelection();
     } catch (err) {
       console.error('Batch KYC action error:', err);
@@ -145,6 +148,7 @@ export default function KYCReview() {
 
           setTutors(prev => prev.filter(t => !selectedIds.has(t.id)));
           showToast(`${idsToProcess.length} tutor profile(s) deleted permanently.`);
+          fetchMetrics();
           handleClearSelection();
         } catch (err) {
           console.error('Batch delete error:', err);
@@ -258,6 +262,28 @@ export default function KYCReview() {
     setActiveAnnotationText('');
   };
 
+  // Fetch queue metrics independently without blocking queue loading
+  const fetchMetrics = async () => {
+    try {
+      const supabase = createClient();
+      const [pendingOnboardingRes, pendingRes, rejectedRes, approvedRes] = await Promise.allSettled([
+        supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).or('onboarding_complete.eq.false,kyc_docs.is.null,kyc_docs.eq.{}').neq('kyc_status', 'approved'),
+        supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'pending').not('kyc_docs', 'is', null).neq('kyc_docs', '{}'),
+        supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'rejected').not('kyc_docs', 'is', null).neq('kyc_docs', '{}'),
+        supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('kyc_status', 'approved')
+      ]);
+
+      setCounts({
+        pending_onboarding: pendingOnboardingRes.status === 'fulfilled' ? (pendingOnboardingRes.value?.count || 0) : 0,
+        pending: pendingRes.status === 'fulfilled' ? (pendingRes.value?.count || 0) : 0,
+        rejected: rejectedRes.status === 'fulfilled' ? (rejectedRes.value?.count || 0) : 0,
+        approved: approvedRes.status === 'fulfilled' ? (approvedRes.value?.count || 0) : 0
+      });
+    } catch (err) {
+      console.warn('KYC metrics fetch warning:', err);
+    }
+  };
+
   // Unified authentication check
   useEffect(() => {
     const checkAuth = async () => {
@@ -272,6 +298,7 @@ export default function KYCReview() {
         }
         setAdminUser(user);
         setAdminRole(user.user_metadata?.admin_role || 'super_admin');
+        fetchMetrics();
       } catch (err) {
         console.error('CheckAuth error:', err);
       }
@@ -279,32 +306,22 @@ export default function KYCReview() {
     checkAuth();
   }, [router]);
 
-  // Unified fetching hook for counts and queue items
+  // Re-fetch metrics whenever reloadTrigger changes
   useEffect(() => {
-    let active = true;
-    const load = async () => {
-      setLoading(true);
-      const supabase = createClient();
+    fetchMetrics();
+  }, [reloadTrigger]);
+
+  // Paginated queue items fetching
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setLoadError(null);
+
+    const loadQueue = async () => {
       try {
-        // Fetch queue metrics counts
-        const [pendingOnboardingRes, pendingRes, rejectedRes, approvedRes] = await Promise.all([
-          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).or('onboarding_complete.eq.false,kyc_docs.is.null,kyc_docs.eq.{}').neq('kyc_status', 'approved'),
-          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'pending').not('kyc_docs', 'is', null).neq('kyc_docs', '{}'),
-          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'rejected').not('kyc_docs', 'is', null).neq('kyc_docs', '{}'),
-          supabase.from('tutor_profiles').select('*', { count: 'exact', head: true }).eq('onboarding_complete', true).eq('kyc_status', 'approved')
-        ]);
-
-        if (active) {
-          setCounts({
-            pending_onboarding: pendingOnboardingRes.count || 0,
-            pending: pendingRes.count || 0,
-            rejected: rejectedRes.count || 0,
-            approved: approvedRes.count || 0
-          });
-        }
-
-        // Fetch paginated queue items
+        const supabase = createClient();
         let query = supabase.from('tutor_profiles').select('*', { count: 'exact' });
+
         if (filterMode === 'pending_onboarding') {
           query = query.or('onboarding_complete.eq.false,kyc_docs.is.null,kyc_docs.eq.{}').neq('kyc_status', 'approved');
         } else if (filterMode === 'pending') {
@@ -312,7 +329,7 @@ export default function KYCReview() {
         } else if (filterMode === 'rejected') {
           query = query.eq('onboarding_complete', true).eq('kyc_status', 'rejected').not('kyc_docs', 'is', null).neq('kyc_docs', '{}');
         } else if (filterMode === 'approved') {
-          query = query.eq('onboarding_complete', true).eq('kyc_status', 'approved');
+          query = query.eq('kyc_status', 'approved');
         }
 
         if (searchQuery.trim() !== '') {
@@ -325,18 +342,35 @@ export default function KYCReview() {
           .range((page - 1) * pageSize, page * pageSize - 1);
 
         if (error) throw error;
-        if (active) {
+        if (!cancelled) {
           setTutors(data || []);
           setTotalCount(count || 0);
+          setLoading(false);
         }
       } catch (err) {
-        console.error(err);
-      } finally {
-        if (active) setLoading(false);
+        console.error('KYC queue load error:', err);
+        if (!cancelled) {
+          setLoadError(err.message || 'Failed to load KYC queue');
+          setLoading(false);
+        }
       }
     };
-    load();
-    return () => { active = false; };
+
+    // Safety timeout: never let loading hang indefinitely if network stalls
+    const safetyTimer = setTimeout(() => {
+      if (!cancelled) {
+        setLoading(false);
+      }
+    }, 8000);
+
+    loadQueue().finally(() => {
+      clearTimeout(safetyTimer);
+    });
+
+    return () => {
+      cancelled = true;
+      clearTimeout(safetyTimer);
+    };
   }, [page, pageSize, filterMode, searchQuery, reloadTrigger, sortField, sortAsc]);
 
   const handleFilterModeChange = (mode) => {
@@ -432,6 +466,7 @@ export default function KYCReview() {
       setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, ...updatedFields } : t));
       setSelectedTutor(prev => ({ ...prev, ...updatedFields }));
       showToast(`Document(s) marked as ${status}.`);
+      fetchMetrics();
 
       // If lightbox is open and we just approved this document, close it gracefully
       if (lightbox.isOpen && status === 'approved') {
@@ -458,11 +493,9 @@ export default function KYCReview() {
   // Load private signed URLs when a tutor is selected
   useEffect(() => {
     if (!selectedTutor) {
-      const timer = setTimeout(() => {
-        setSignedUrls({});
-        setAnnotations({});
-      }, 0);
-      return () => clearTimeout(timer);
+      setSignedUrls({});
+      setAnnotations({});
+      return;
     }
 
     const initialAnns = {};
@@ -472,9 +505,7 @@ export default function KYCReview() {
         initialAnns[k] = verif[k].annotations;
       }
     });
-    setTimeout(() => {
-      setAnnotations(initialAnns);
-    }, 0);
+    setAnnotations(initialAnns);
 
     const loadUrls = async () => {
       setLoadingDocs(true);
@@ -612,6 +643,7 @@ export default function KYCReview() {
             details: 'All identity and degree verification documents validated.'
           });
           showToast('Tutor KYC approved & 500 bonus credits awarded successfully.');
+          fetchMetrics();
         } catch (err) {
           showToast(err.message, 'error');
         } finally {
@@ -661,6 +693,7 @@ export default function KYCReview() {
       setSelectedTutor(prev => ({ ...prev, kyc_status: 'rejected', verified: false, kyc_objections: objectionsData }));
       setShowObjections(false);
       showToast('Objections submitted successfully.');
+      fetchMetrics();
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -803,7 +836,7 @@ export default function KYCReview() {
             <h1>KYC Verification Queue</h1>
             <p>Vet credentials, analyze degrees, flag document corrections, and issue verified badges.</p>
           </div>
-          <button className="admin-btn admin-btn-secondary" onClick={() => setReloadTrigger(t => t + 1)}>
+          <button className="admin-btn admin-btn-secondary" onClick={() => { setReloadTrigger(t => t + 1); fetchMetrics(); }}>
             <RefreshCw size={14} /> Refresh Queue
           </button>
         </div>
@@ -954,9 +987,27 @@ export default function KYCReview() {
         {/* KYC Queue Table */}
         <div className="admin-table-container">
           {loading ? (
-            <p style={{ textAlign: 'center', padding: '40px' }}>Loading KYC queue...</p>
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--steel)' }}>
+              <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '12px' }}>
+                <Loader2 size={28} className="animate-spin" color="var(--brand-green, #10B981)" style={{ animation: 'spin 1s linear infinite' }} />
+                <p style={{ margin: 0, fontSize: '14px', fontWeight: 500 }}>Loading KYC queue...</p>
+              </div>
+            </div>
+          ) : loadError ? (
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--steel)' }}>
+              <AlertCircle size={32} color="#EF4444" style={{ marginBottom: '12px', display: 'inline-block' }} />
+              <p style={{ margin: '0 0 16px 0', fontSize: '14px', color: '#EF4444' }}>{loadError}</p>
+              <button className="admin-btn admin-btn-secondary" onClick={() => { setReloadTrigger(t => t + 1); fetchMetrics(); }}>
+                <RefreshCw size={14} /> Retry
+              </button>
+            </div>
           ) : filteredTutors.length === 0 ? (
-            <p style={{ textAlign: 'center', padding: '40px' }}>No tutors found in this status queue.</p>
+            <div style={{ textAlign: 'center', padding: '60px 20px', color: 'var(--steel)' }}>
+              <p style={{ margin: '0 0 16px 0', fontSize: '14px' }}>No tutors found in this status queue.</p>
+              <button className="admin-btn admin-btn-secondary" onClick={() => { setReloadTrigger(t => t + 1); fetchMetrics(); }}>
+                <RefreshCw size={14} /> Refresh
+              </button>
+            </div>
           ) : (
             <table className="admin-table">
               <thead>
