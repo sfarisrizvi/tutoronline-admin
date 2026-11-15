@@ -355,26 +355,67 @@ export default function AdminTutors() {
       const kycDocs = selectedTutor.kyc_docs || {};
 
       try {
+        const signPromises = [];
+
         for (const key of Object.keys(kycDocs)) {
           if (!active) return;
-          const path = kycDocs[key];
-          if (path && typeof path === 'string') {
-            const { data, error } = await supabase.storage.from('teacher-files').createSignedUrl(path, 3600);
-            if (!error && data) {
-              urls[key] = data.signedUrl;
+          const val = kycDocs[key];
+          if (!val) continue;
+
+          // Skip non-file metadata fields
+          if (['degree_name', 'education_level', 'education_title', 'institution', 'graduation_year'].includes(key)) {
+            continue;
+          }
+
+          if (typeof val === 'string') {
+            if (val.includes('/') || /\.(jpe?g|png|pdf|webp)$/i.test(val)) {
+              signPromises.push(
+                supabase.storage.from('teacher-files').createSignedUrl(val, 3600)
+                  .then(({ data, error }) => {
+                    if (active && !error && data?.signedUrl) {
+                      urls[key] = data.signedUrl;
+                    }
+                  })
+                  .catch(e => console.warn(`Error signing ${key}:`, e))
+              );
             }
-          } else if (Array.isArray(path)) {
-            const certUrls = [];
-            for (const certPath of path) {
-              if (!active) return;
-              const { data, error } = await supabase.storage.from('teacher-files').createSignedUrl(certPath, 3600);
-              if (!error && data) {
-                certUrls.push(data.signedUrl);
-              }
+          } else if (Array.isArray(val)) {
+            const pathsToSign = val.map(item => {
+              if (typeof item === 'string') return item;
+              return item?.path || item?.url || item?.file_path || null;
+            }).filter(Boolean);
+
+            if (pathsToSign.length > 0) {
+              const arrayPromises = pathsToSign.map(p =>
+                supabase.storage.from('teacher-files').createSignedUrl(p, 3600)
+                  .then(({ data, error }) => (!error && data?.signedUrl ? data.signedUrl : null))
+                  .catch(() => null)
+              );
+              signPromises.push(
+                Promise.all(arrayPromises).then(signedList => {
+                  if (active) {
+                    urls[key] = signedList.filter(Boolean);
+                  }
+                })
+              );
             }
-            urls[key] = certUrls;
+          } else if (typeof val === 'object' && val !== null) {
+            const actualPath = val.path || val.url || val.file_path;
+            if (actualPath && typeof actualPath === 'string') {
+              signPromises.push(
+                supabase.storage.from('teacher-files').createSignedUrl(actualPath, 3600)
+                  .then(({ data, error }) => {
+                    if (active && !error && data?.signedUrl) {
+                      urls[key] = data.signedUrl;
+                    }
+                  })
+                  .catch(e => console.warn(`Error signing ${key}:`, e))
+              );
+            }
           }
         }
+
+        await Promise.all(signPromises);
         if (active) {
           setSignedUrls(urls);
         }
@@ -1150,7 +1191,7 @@ export default function AdminTutors() {
                   <p style={{ fontSize: '12px', color: 'var(--steel)' }}>No verification documents uploaded.</p>
                 ) : (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
-                    {Object.keys(selectedTutor.kyc_docs).map((key) => {
+                    {Object.keys(selectedTutor.kyc_docs).filter(k => !['degree_name', 'education_level', 'education_title', 'institution', 'graduation_year'].includes(k)).map((key) => {
                       const docUrl = signedUrls[key];
                       const isArray = Array.isArray(docUrl);
 
@@ -1404,12 +1445,12 @@ export default function AdminTutors() {
                 onMouseUp={() => setIsDragging(false)}
                 onMouseLeave={() => setIsDragging(false)}
               >
-                {lightbox.url.includes('.pdf') || lightbox.url.includes('/pdf') ? (
+                {lightbox.url && (lightbox.url.includes('.pdf') || lightbox.url.includes('/pdf')) ? (
                   <iframe 
                     src={lightbox.url} 
                     style={{ width: '100%', height: '100%', border: 'none', backgroundColor: '#ffffff' }}
                   />
-                ) : (
+                ) : lightbox.url ? (
                   <div style={{ position: 'relative', display: 'inline-block' }}>
                     <img 
                       src={lightbox.url} 
@@ -1508,6 +1549,11 @@ export default function AdminTutors() {
                       </div>
                     )}
                   </div>
+                ) : (
+                  <div style={{ color: 'var(--steel)', padding: '40px', textAlign: 'center' }}>
+                    <p style={{ fontSize: '14px', marginBottom: '8px' }}>Document image is not available or still generating.</p>
+                    <span style={{ fontSize: '12px' }}>Please close this preview and try again.</span>
+                  </div>
                 )}
               </div>
 
@@ -1572,16 +1618,26 @@ export default function AdminTutors() {
                   </button>
 
                   {/* Direct download inside lightbox */}
-                  <a 
-                    href={lightbox.url} 
-                    download 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="admin-btn admin-btn-primary" 
-                    style={{ width: '100%', fontSize: '12px' }}
-                  >
-                    <Download size={14} /> Download Document
-                  </a>
+                  {lightbox.url ? (
+                    <a 
+                      href={lightbox.url} 
+                      download 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="admin-btn admin-btn-primary" 
+                      style={{ width: '100%', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                    >
+                      <Download size={14} /> Download Document
+                    </a>
+                  ) : (
+                    <button 
+                      disabled 
+                      className="admin-btn admin-btn-secondary" 
+                      style={{ width: '100%', fontSize: '12px', opacity: 0.5 }}
+                    >
+                      <Download size={14} /> Download Unavailable
+                    </button>
+                  )}
                 </div>
 
                 {/* List of pins placed */}

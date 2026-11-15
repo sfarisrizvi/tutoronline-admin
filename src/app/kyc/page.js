@@ -368,8 +368,13 @@ export default function KYCReview() {
     
     const currentVerifications = selectedTutor.kyc_verifications || {};
     let keysToUpdate = [key];
-    if (key === 'cnic') {
-      keysToUpdate = ['cnic_front', 'cnic_back'];
+    if (key === 'cnic' || key === 'cnic_front' || key === 'cnic_back') {
+      if (status === 'approved') {
+        // Approving CNIC approves both front and back
+        keysToUpdate = ['cnic_front', 'cnic_back'];
+      } else {
+        keysToUpdate = [key];
+      }
     }
 
     let newVerifications = { ...currentVerifications };
@@ -413,9 +418,26 @@ export default function KYCReview() {
         throw new Error(errMsg);
       }
 
-      setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, kyc_verifications: newVerifications } : t));
-      setSelectedTutor(prev => ({ ...prev, kyc_verifications: newVerifications }));
+      // Check if primary identity & degree docs are now verified
+      const cnicFrontOk = newVerifications?.cnic_front?.status === 'approved';
+      const cnicBackOk = newVerifications?.cnic_back?.status === 'approved';
+      const degreeOk = newVerifications?.degree?.status === 'approved';
+      const allApproved = cnicFrontOk && cnicBackOk && degreeOk;
+
+      const updatedFields = {
+        kyc_verifications: newVerifications,
+        ...(allApproved ? { kyc_status: 'approved', verified: true, kyc_objections: null } : {})
+      };
+
+      setTutors(prev => prev.map(t => t.id === selectedTutor.id ? { ...t, ...updatedFields } : t));
+      setSelectedTutor(prev => ({ ...prev, ...updatedFields }));
       showToast(`Document(s) marked as ${status}.`);
+
+      // If lightbox is open and we just approved this document, close it gracefully
+      if (lightbox.isOpen && status === 'approved') {
+        setLightbox({ isOpen: false, url: '', title: '', docKey: '', urls: [], activeUrlIndex: 0 });
+        resetLightboxControls();
+      }
     } catch (err) {
       showToast(err.message, 'error');
     } finally {
@@ -461,27 +483,67 @@ export default function KYCReview() {
       const kycDocs = selectedTutor.kyc_docs || {};
 
       try {
+        const signPromises = [];
+
         for (const key of Object.keys(kycDocs)) {
-          const path = kycDocs[key];
-          if (path && typeof path === 'string') {
-            const { data, error } = await supabase.storage.from('teacher-files').createSignedUrl(path, 3600);
-            if (!error && data) {
-              urls[key] = data.signedUrl;
+          const val = kycDocs[key];
+          if (!val) continue;
+
+          // Skip non-file metadata fields
+          if (['degree_name', 'education_level', 'education_title', 'institution', 'graduation_year'].includes(key)) {
+            continue;
+          }
+
+          if (typeof val === 'string') {
+            if (val.includes('/') || /\.(jpe?g|png|pdf|webp)$/i.test(val)) {
+              signPromises.push(
+                supabase.storage.from('teacher-files').createSignedUrl(val, 3600)
+                  .then(({ data, error }) => {
+                    if (!error && data?.signedUrl) {
+                      urls[key] = data.signedUrl;
+                    }
+                  })
+                  .catch(e => console.warn(`Error signing ${key}:`, e))
+              );
             }
-          } else if (Array.isArray(path)) {
-            const certUrls = [];
-            for (const certPath of path) {
-              const { data, error } = await supabase.storage.from('teacher-files').createSignedUrl(certPath, 3600);
-              if (!error && data) {
-                certUrls.push(data.signedUrl);
-              }
+          } else if (Array.isArray(val)) {
+            const pathsToSign = val.map(item => {
+              if (typeof item === 'string') return item;
+              return item?.path || item?.url || item?.file_path || null;
+            }).filter(Boolean);
+
+            if (pathsToSign.length > 0) {
+              const arrayPromises = pathsToSign.map(p =>
+                supabase.storage.from('teacher-files').createSignedUrl(p, 3600)
+                  .then(({ data, error }) => (!error && data?.signedUrl ? data.signedUrl : null))
+                  .catch(() => null)
+              );
+              signPromises.push(
+                Promise.all(arrayPromises).then(signedList => {
+                  urls[key] = signedList.filter(Boolean);
+                })
+              );
             }
-            urls[key] = certUrls;
+          } else if (typeof val === 'object' && val !== null) {
+            const actualPath = val.path || val.url || val.file_path;
+            if (actualPath && typeof actualPath === 'string') {
+              signPromises.push(
+                supabase.storage.from('teacher-files').createSignedUrl(actualPath, 3600)
+                  .then(({ data, error }) => {
+                    if (!error && data?.signedUrl) {
+                      urls[key] = data.signedUrl;
+                    }
+                  })
+                  .catch(e => console.warn(`Error signing ${key}:`, e))
+              );
+            }
           }
         }
+
+        await Promise.all(signPromises);
         setSignedUrls(urls);
       } catch (err) {
-        console.error(err);
+        console.error('Error loading KYC signed URLs:', err);
       } finally {
         setLoadingDocs(false);
       }
@@ -493,6 +555,7 @@ export default function KYCReview() {
   // Approve Tutor
   const handleApprove = async () => {
     if (!selectedTutor || adminRole === 'monitor') return;
+    const supabase = createClient();
 
     // Validation check: A profile cannot get KYC approved without CNIC and Degree documents approval
     const verif = selectedTutor.kyc_verifications || {};
@@ -1333,19 +1396,27 @@ export default function KYCReview() {
                                     onClick={() => {
                                       const frontUrl = signedUrls['cnic_front'];
                                       const backUrl = signedUrls['cnic_back'];
+                                      const activeUrl = frontUrl || backUrl || '';
+                                      const validUrls = [frontUrl, backUrl].filter(Boolean);
+                                      if (!activeUrl) {
+                                        showToast("CNIC document image is still loading. Please wait a moment.", "error");
+                                        return;
+                                      }
                                       setLightbox({ 
                                         isOpen: true, 
-                                        url: frontUrl || backUrl, 
-                                        urls: [frontUrl, backUrl].filter(Boolean),
+                                        url: activeUrl, 
+                                        urls: validUrls.length > 0 ? validUrls : [activeUrl],
                                         activeUrlIndex: 0,
                                         title: 'CNIC (Identity Document)', 
                                         docKey: 'cnic_front' 
                                       });
                                     }}
+                                    disabled={loadingDocs || (!signedUrls['cnic_front'] && !signedUrls['cnic_back'])}
                                     className="admin-btn admin-btn-secondary"
-                                    style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px' }}
+                                    style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', opacity: (loadingDocs || (!signedUrls['cnic_front'] && !signedUrls['cnic_back'])) ? 0.6 : 1 }}
+                                    title={loadingDocs ? 'Loading document links...' : 'View CNIC Front & Back'}
                                   >
-                                    <Eye size={12} /> View Both
+                                    <Eye size={12} /> {loadingDocs ? 'Loading...' : (hasFront && hasBack ? 'View Both' : 'View')}
                                   </button>
                                 )}
 
@@ -1419,12 +1490,19 @@ export default function KYCReview() {
                               <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
                                 {hasDegree && (
                                   <button
-                                    onClick={() => signedUrls['degree'] && setLightbox({ isOpen: true, url: signedUrls['degree'], title: 'Degree Certificate', docKey: 'degree' })}
+                                    onClick={() => {
+                                      const degUrl = signedUrls['degree'];
+                                      if (!degUrl) {
+                                        showToast("Degree document is still loading. Please wait a moment.", "error");
+                                        return;
+                                      }
+                                      setLightbox({ isOpen: true, url: degUrl, title: 'Degree Certificate', docKey: 'degree', urls: [degUrl], activeUrlIndex: 0 });
+                                    }}
                                     className="admin-btn admin-btn-secondary"
-                                    style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px' }}
-                                    disabled={!signedUrls['degree']}
+                                    style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', opacity: (loadingDocs || !signedUrls['degree']) ? 0.6 : 1 }}
+                                    disabled={loadingDocs || !signedUrls['degree']}
                                   >
-                                    <Eye size={12} /> View
+                                    <Eye size={12} /> {loadingDocs ? 'Loading...' : 'View'}
                                   </button>
                                 )}
 
@@ -1505,13 +1583,20 @@ export default function KYCReview() {
                                   </div>
 
                                   <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                                    {hasCertificates && certsUrls.length > 0 && (
+                                    {hasCertificates && (
                                       <button
-                                        onClick={() => setLightbox({ isOpen: true, url: certsUrls[0], urls: certsUrls, activeUrlIndex: 0, title: 'Certificates Document', docKey: 'certificates' })}
+                                        onClick={() => {
+                                          if (certsUrls.length > 0) {
+                                            setLightbox({ isOpen: true, url: certsUrls[0], urls: certsUrls, activeUrlIndex: 0, title: 'Certificates Document', docKey: 'certificates' });
+                                          } else {
+                                            showToast("Certificates are still loading. Please wait a moment.", "error");
+                                          }
+                                        }}
                                         className="admin-btn admin-btn-secondary"
-                                        style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px' }}
+                                        style={{ padding: '4px 8px', fontSize: '11px', borderRadius: '4px', opacity: (loadingDocs || certsUrls.length === 0) ? 0.6 : 1 }}
+                                        disabled={loadingDocs || certsUrls.length === 0}
                                       >
-                                        <Eye size={12} /> View {certsCount > 1 ? `(${certsCount})` : ''}
+                                        <Eye size={12} /> {loadingDocs ? 'Loading...' : `View ${certsCount > 1 ? `(${certsCount})` : ''}`}
                                       </button>
                                     )}
 
@@ -1713,36 +1798,63 @@ export default function KYCReview() {
               <span style={{ fontSize: '18px', fontWeight: 600 }}>{lightbox.title}</span>
               {lightbox.urls && lightbox.urls.length > 1 && (
                 <div style={{ display: 'flex', gap: '8px', marginLeft: '12px' }}>
-                  <button
-                    onClick={() => setLightbox(prev => ({ ...prev, url: lightbox.urls[0], activeUrlIndex: 0, docKey: 'cnic_front', title: 'CNIC Front Image' }))}
-                    style={{
-                      padding: '4px 12px',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      borderRadius: '6px',
-                      border: (lightbox.activeUrlIndex === 0 || !lightbox.activeUrlIndex) ? '2px solid var(--brand-green)' : '1px solid var(--hairline)',
-                      backgroundColor: (lightbox.activeUrlIndex === 0 || !lightbox.activeUrlIndex) ? 'var(--brand-green-soft)' : 'var(--canvas)',
-                      color: (lightbox.activeUrlIndex === 0 || !lightbox.activeUrlIndex) ? 'var(--brand-green-dark)' : 'var(--ink)',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    🪪 CNIC Front
-                  </button>
-                  <button
-                    onClick={() => setLightbox(prev => ({ ...prev, url: lightbox.urls[1], activeUrlIndex: 1, docKey: 'cnic_back', title: 'CNIC Back Image' }))}
-                    style={{
-                      padding: '4px 12px',
-                      fontSize: '12px',
-                      fontWeight: 600,
-                      borderRadius: '6px',
-                      border: lightbox.activeUrlIndex === 1 ? '2px solid var(--brand-green)' : '1px solid var(--hairline)',
-                      backgroundColor: lightbox.activeUrlIndex === 1 ? 'var(--brand-green-soft)' : 'var(--canvas)',
-                      color: lightbox.activeUrlIndex === 1 ? 'var(--brand-green-dark)' : 'var(--ink)',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    🪪 CNIC Back
-                  </button>
+                  {lightbox.docKey && (lightbox.docKey.startsWith('cnic') || lightbox.docKey === 'cnic') ? (
+                    <>
+                      {lightbox.urls[0] && (
+                        <button
+                          onClick={() => setLightbox(prev => ({ ...prev, url: lightbox.urls[0], activeUrlIndex: 0, docKey: 'cnic_front', title: 'CNIC Front Image' }))}
+                          style={{
+                            padding: '4px 12px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            borderRadius: '6px',
+                            border: (lightbox.activeUrlIndex === 0 || !lightbox.activeUrlIndex) ? '2px solid var(--brand-green)' : '1px solid var(--hairline)',
+                            backgroundColor: (lightbox.activeUrlIndex === 0 || !lightbox.activeUrlIndex) ? 'var(--brand-green-soft)' : 'var(--canvas)',
+                            color: (lightbox.activeUrlIndex === 0 || !lightbox.activeUrlIndex) ? 'var(--brand-green-dark)' : 'var(--ink)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          🪪 CNIC Front
+                        </button>
+                      )}
+                      {lightbox.urls[1] && (
+                        <button
+                          onClick={() => setLightbox(prev => ({ ...prev, url: lightbox.urls[1], activeUrlIndex: 1, docKey: 'cnic_back', title: 'CNIC Back Image' }))}
+                          style={{
+                            padding: '4px 12px',
+                            fontSize: '12px',
+                            fontWeight: 600,
+                            borderRadius: '6px',
+                            border: lightbox.activeUrlIndex === 1 ? '2px solid var(--brand-green)' : '1px solid var(--hairline)',
+                            backgroundColor: lightbox.activeUrlIndex === 1 ? 'var(--brand-green-soft)' : 'var(--canvas)',
+                            color: lightbox.activeUrlIndex === 1 ? 'var(--brand-green-dark)' : 'var(--ink)',
+                            cursor: 'pointer'
+                          }}
+                        >
+                          🪪 CNIC Back
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    lightbox.urls.map((u, idx) => (
+                      <button
+                        key={idx}
+                        onClick={() => setLightbox(prev => ({ ...prev, url: u, activeUrlIndex: idx, title: `${(lightbox.title || 'Document').replace(/\s*\(\d+\)/, '')} (${idx + 1})` }))}
+                        style={{
+                          padding: '4px 12px',
+                          fontSize: '12px',
+                          fontWeight: 600,
+                          borderRadius: '6px',
+                          border: lightbox.activeUrlIndex === idx ? '2px solid var(--brand-green)' : '1px solid var(--hairline)',
+                          backgroundColor: lightbox.activeUrlIndex === idx ? 'var(--brand-green-soft)' : 'var(--canvas)',
+                          color: lightbox.activeUrlIndex === idx ? 'var(--brand-green-dark)' : 'var(--ink)',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        📄 Document {idx + 1}
+                      </button>
+                    ))
+                  )}
                 </div>
               )}
               <span className="admin-badge admin-badge-grey">
@@ -1813,12 +1925,12 @@ export default function KYCReview() {
                 }}
                 onMouseLeave={() => setIsDragging(false)}
               >
-                {lightbox.url.includes('.pdf') || lightbox.url.includes('/pdf') ? (
+                {lightbox.url && (lightbox.url.includes('.pdf') || lightbox.url.includes('/pdf')) ? (
                   <iframe 
                     src={lightbox.url} 
                     style={{ width: '100%', height: '100%', border: 'none', backgroundColor: '#ffffff' }}
                   />
-                ) : (
+                ) : lightbox.url ? (
                   <div style={{ position: 'relative', display: 'inline-block' }}>
                     <img 
                       src={lightbox.url} 
@@ -1938,6 +2050,11 @@ export default function KYCReview() {
                       </div>
                     )}
                   </div>
+                ) : (
+                  <div style={{ color: 'var(--steel)', padding: '40px', textAlign: 'center' }}>
+                    <p style={{ fontSize: '14px', marginBottom: '8px' }}>Document image is not available or still generating.</p>
+                    <span style={{ fontSize: '12px' }}>Please close this preview and try again.</span>
+                  </div>
                 )}
               </div>
 
@@ -1997,16 +2114,26 @@ export default function KYCReview() {
                     {annMode ? '✓ Drawing Mode Active' : '📍 Pin Objection Comment'}
                   </button>
 
-                  <a 
-                    href={lightbox.url} 
-                    download 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="admin-btn admin-btn-primary" 
-                    style={{ width: '100%', fontSize: '12px' }}
-                  >
-                    <Download size={14} /> Download Document
-                  </a>
+                  {lightbox.url ? (
+                    <a 
+                      href={lightbox.url} 
+                      download 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      className="admin-btn admin-btn-primary" 
+                      style={{ width: '100%', fontSize: '12px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                    >
+                      <Download size={14} /> Download Document
+                    </a>
+                  ) : (
+                    <button 
+                      disabled 
+                      className="admin-btn admin-btn-secondary" 
+                      style={{ width: '100%', fontSize: '12px', opacity: 0.5 }}
+                    >
+                      <Download size={14} /> Download Unavailable
+                    </button>
+                  )}
                 </div>
 
                 <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
