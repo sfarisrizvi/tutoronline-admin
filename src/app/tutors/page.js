@@ -26,8 +26,12 @@ import {
   MessageSquareOff,
   CheckSquare,
   Square,
-  Ban
+  Ban,
+  Mail,
+  MessageSquare
 } from 'lucide-react';
+import AdminNoticeModal from '../../components/AdminNoticeModal';
+import AdminFloatingChat from '../../components/AdminFloatingChat';
 
 export default function AdminTutors() {
   const router = useRouter();
@@ -35,6 +39,10 @@ export default function AdminTutors() {
   const [tutors, setTutors] = useState([]);
   const [adminUser, setAdminUser] = useState(null);
   const [adminRole, setAdminRole] = useState('super_admin');
+
+  // Direct Communication states
+  const [noticeModalUser, setNoticeModalUser] = useState(null);
+  const [chatUser, setChatUser] = useState(null);
 
   // Filter, Search, Pagination
   const [filterMode, setFilterMode] = useState('all'); // 'all' | 'pending' | 'verified' | 'suspended'
@@ -1328,6 +1336,26 @@ export default function AdminTutors() {
                     </div>
                   )}
 
+                  {/* Direct User Communication Options */}
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', width: '100%' }}>
+                    <button 
+                      onClick={() => setNoticeModalUser(selectedTutor)} 
+                      className="admin-btn admin-btn-secondary" 
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                      title="Compose and send official email notice"
+                    >
+                      <Mail size={14} color="#F59E0B" /> Send Notice
+                    </button>
+                    <button 
+                      onClick={() => setChatUser(selectedTutor)} 
+                      className="admin-btn admin-btn-secondary" 
+                      style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px' }}
+                      title="Open Facebook-style live chat dock"
+                    >
+                      <MessageSquare size={14} color="var(--brand-green, #10B981)" /> Direct Chat
+                    </button>
+                  </div>
+
                   <div style={{ display: 'flex', gap: '12px', width: '100%' }}>
                     {selectedTutor.suspended ? (
                       <>
@@ -1759,6 +1787,23 @@ export default function AdminTutors() {
           </div>
         </>
       )}
+
+      {/* Official Email Notice Composer Modal */}
+      <AdminNoticeModal
+        isOpen={!!noticeModalUser}
+        onClose={() => setNoticeModalUser(null)}
+        targetUser={noticeModalUser}
+        adminUser={adminUser}
+        onSuccess={(msg) => showToast(msg, 'success')}
+      />
+
+      {/* Facebook-style Docked Floating Direct Chatbox */}
+      <AdminFloatingChat
+        isOpen={!!chatUser}
+        onClose={() => setChatUser(null)}
+        targetUser={chatUser}
+        adminUser={adminUser}
+      />
 
     </div>
   );
